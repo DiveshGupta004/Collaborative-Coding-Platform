@@ -14,7 +14,7 @@ export default function Navbar() {
           to="/"
           className="text-2xl font-extrabold text-indigo-400 tracking-wide"
         >
-          CodeMate
+          CodeMate.
         </Link>
 
 
