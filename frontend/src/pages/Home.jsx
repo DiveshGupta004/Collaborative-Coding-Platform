@@ -11,7 +11,7 @@ export default function Home() {
   };
 
   return (
-    <div className="relative bg-gray-900 text-white overflow-hidden">
+    <div className="relative bg-gray-900 text-white overflow-hidden px-6 pt-[80px]">
       <div className="absolute top-[-100px] left-1/2 transform -translate-x-1/2 w-[600px] h-[600px] bg-indigo-600 opacity-20 blur-[180px] rounded-full"></div>
 
       <section className="relative z-10 flex flex-col items-center justify-center py-24 px-6 text-center">
