@@ -1,4 +1,7 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
+import CreateWorkspaceModal from "../components/CreateWorkspaceModal";
 
 export default function Home() {
   const featureVariants = {
@@ -10,10 +13,39 @@ export default function Home() {
     }),
   };
 
+  const navigate = useNavigate();
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [emails, setEmails] = useState([]); // ✅ changed from string → array
+
+  // Create Workspace
+  const handleCreateWorkspace = (e) => {
+    e.preventDefault();
+
+    // Generate unique room ID
+    const roomId = Math.random().toString(36).substring(2, 8);
+
+    // Log project info (later we’ll send this to backend)
+    console.log({
+      projectName,
+      collaborators: emails,
+    });
+
+    // Reset modal state
+    setIsModalOpen(false);
+    setProjectName("");
+    setEmails([]);
+
+    // Redirect to editor
+    navigate(`/room/${roomId}`);
+  };
+
   return (
     <div className="relative bg-gray-900 text-white overflow-hidden px-6 pt-[80px]">
+      {/* Background Glow */}
       <div className="absolute top-[-100px] left-1/2 transform -translate-x-1/2 w-[600px] h-[600px] bg-indigo-600 opacity-20 blur-[180px] rounded-full"></div>
 
+      {/* Hero Section */}
       <section className="relative z-10 flex flex-col items-center justify-center py-24 px-6 text-center">
         <motion.h1
           className="text-5xl md:text-6xl font-extrabold mb-6 bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent"
@@ -30,23 +62,25 @@ export default function Home() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3, duration: 0.8 }}
         >
-          Experience real-time collaborative coding — where innovation meets teamwork.
-          Write, debug, and deploy together from anywhere in the world.
+          Experience real-time collaborative coding — where innovation meets teamwork.  
+          Create your workspace, invite your team, and code together instantly.
         </motion.p>
 
+        {/* Get Started */}
         <motion.button
+          onClick={() => setIsModalOpen(true)}
           whileHover={{
             scale: 1.07,
             boxShadow: "0px 0px 15px rgba(99,102,241,0.6)",
           }}
           whileTap={{ scale: 0.97 }}
-          className="bg-indigo-500 hover:bg-indigo-600 px-6 py-3 rounded-lg font-semibold text-white shadow-lg transition-all duration-300"
+          className="bg-indigo-500 hover:bg-indigo-600 px-8 py-3 rounded-lg font-semibold text-white shadow-lg transition-all duration-300"
         >
           Get Started
         </motion.button>
       </section>
 
-
+      {/* Features Section */}
       <section className="py-20 px-6 bg-gray-900 text-center relative z-10">
         <motion.h2
           className="text-3xl font-bold text-indigo-400 mb-12"
@@ -89,6 +123,17 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      {/* Reusable Modal */}
+      <CreateWorkspaceModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onCreate={handleCreateWorkspace}
+        projectName={projectName}
+        setProjectName={setProjectName}
+        emails={emails} // ✅ now array
+        setEmails={setEmails}
+      />
     </div>
   );
 }
