@@ -1,10 +1,13 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
+import api from "../api/axios";
+import toast from "react-hot-toast";
 
 export default function Signup() {
+  const navigate = useNavigate();
   const [form, setForm] = useState({
-    name: "",
+    username: "",
     email: "",
     password: "",
     confirmPassword: "",
@@ -14,13 +17,24 @@ export default function Signup() {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (form.password !== form.confirmPassword) {
-      alert("Passwords do not match!");
+      toast.error("Passwords do not match!");
       return;
     }
-    console.log("Signup data:", form);
+    try {
+      const res = await api.post("/auth/signup", {
+        username: form.username,
+        email: form.email,
+        password: form.password,
+        confirmPassword: form.confirmPassword,
+      });
+      toast.success(res.data.message || "Signup successful!");
+      navigate("/login");
+    } catch (error) {
+      toast.error(error.response.data.message || "Signup failed. Please try again.");
+    }
   };
 
   return (
@@ -52,8 +66,8 @@ export default function Signup() {
             <label className="block text-sm text-gray-300 mb-2">Name</label>
             <input
               type="text"
-              name="name"
-              value={form.name}
+              name="username"
+              value={form.username}
               onChange={handleChange}
               required
               placeholder="John Doe"

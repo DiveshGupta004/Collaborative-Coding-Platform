@@ -1,9 +1,18 @@
-import { useState } from "react";
+import { useState, useContext, useEffect } from "react";
 import { motion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 import CreateWorkspaceModal from "../components/CreateWorkspaceModal";
+import { AuthContext } from "../context/AuthContext";
+import toast from "react-hot-toast";
 
 export default function Home() {
+  const navigate = useNavigate();
+  const { user } = useContext(AuthContext);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [emails, setEmails] = useState([]);
+
   const featureVariants = {
     hidden: { opacity: 0, y: 30 },
     visible: (i) => ({
@@ -13,35 +22,45 @@ export default function Home() {
     }),
   };
 
-  const navigate = useNavigate();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [projectName, setProjectName] = useState("");
-  const [emails, setEmails] = useState([]); // ✅ changed from string → array
+  // 🔥 Auto-open workspace modal after redirect from login
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("openWorkspaceModal") === "true" && user) {
+      setIsModalOpen(true);
+    }
+  }, [user]);
 
-  // Create Workspace
+  // 🔥 Get Started logic (requires login)
+  const handleGetStarted = () => {
+    if (!user) {
+      toast.error("Please login to create a workspace.");
+      navigate("/login?redirect=create-workspace");
+      return;
+    }
+    setIsModalOpen(true);
+  };
+
+  // 🔥 Create workspace handler
   const handleCreateWorkspace = (e) => {
     e.preventDefault();
 
-    // Generate unique room ID
     const roomId = Math.random().toString(36).substring(2, 8);
 
-    // Log project info (later we’ll send this to backend)
     console.log({
       projectName,
       collaborators: emails,
     });
 
-    // Reset modal state
     setIsModalOpen(false);
     setProjectName("");
     setEmails([]);
 
-    // Redirect to editor
     navigate(`/room/${roomId}`);
   };
 
   return (
     <div className="relative bg-gray-900 text-white overflow-hidden px-6 pt-[80px]">
+
       {/* Background Glow */}
       <div className="absolute top-[-100px] left-1/2 transform -translate-x-1/2 w-[600px] h-[600px] bg-indigo-600 opacity-20 blur-[180px] rounded-full"></div>
 
@@ -62,13 +81,13 @@ export default function Home() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3, duration: 0.8 }}
         >
-          Experience real-time collaborative coding — where innovation meets teamwork.  
+          Experience real-time collaborative coding — where innovation meets teamwork.
           Create your workspace, invite your team, and code together instantly.
         </motion.p>
 
         {/* Get Started */}
         <motion.button
-          onClick={() => setIsModalOpen(true)}
+          onClick={handleGetStarted}
           whileHover={{
             scale: 1.07,
             boxShadow: "0px 0px 15px rgba(99,102,241,0.6)",
@@ -124,14 +143,14 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Reusable Modal */}
+      {/* Create Workspace Modal */}
       <CreateWorkspaceModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onCreate={handleCreateWorkspace}
         projectName={projectName}
         setProjectName={setProjectName}
-        emails={emails} // ✅ now array
+        emails={emails}
         setEmails={setEmails}
       />
     </div>

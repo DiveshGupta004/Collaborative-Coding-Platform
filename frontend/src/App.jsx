@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import EditorPage from "./pages/EditorPage";
 import { useEffect } from "react";
+import { Toaster } from "react-hot-toast";
 
 // Wrapper to handle conditional layout
 function LayoutWrapper({ children }) {
@@ -28,16 +29,28 @@ function LayoutWrapper({ children }) {
 
 function App() {
   return (
-    <BrowserRouter>
-      <LayoutWrapper>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
-          <Route path="/room/:roomId" element={<EditorPage />} />
-        </Routes>
-      </LayoutWrapper>
-    </BrowserRouter>
+    <>
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          style: {
+            background: "#1f2937",
+            color: "#fff",
+            border: "1px solid #4b5563",
+          },
+        }}
+      />
+      <BrowserRouter>
+        <LayoutWrapper>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/signup" element={<Signup />} />
+            <Route path="/room/:roomId" element={<EditorPage />} />
+          </Routes>
+        </LayoutWrapper>
+      </BrowserRouter>
+    </>
   );
 }
 
