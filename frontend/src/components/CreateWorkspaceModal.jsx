@@ -10,51 +10,42 @@ export default function CreateWorkspaceModal({
   onCreate,
   projectName,
   setProjectName,
-  emails,          // array of strings
-  setEmails,       // setter for array
+  emails,
+  setEmails,
 }) {
   const [inputValue, setInputValue] = useState("");
   const [error, setError] = useState("");
   const inputRef = useRef(null);
 
-  const addEmailsFromString = (raw) => {
-    if (!raw) return;
-    const parts = raw
-      .split(/[,\s]+/)           // split on comma or whitespace
-      .map((e) => e.trim())
+  const addEmails = (raw) => {
+    const list = raw
+      .split(/[,\s]+/)
+      .map((x) => x.trim().toLowerCase())
       .filter(Boolean);
 
-    if (parts.length === 0) return;
-
-    const newEmails = [...emails];
     let invalidFound = false;
+    const updated = [...emails];
 
-    for (const e of parts) {
-      if (!isValidEmail(e)) {
+    list.forEach((email) => {
+      if (!isValidEmail(email)) {
         invalidFound = true;
-        continue;
+      } else if (!updated.includes(email)) {
+        updated.push(email);
       }
-      if (!newEmails.includes(e)) newEmails.push(e); // de-dup
-    }
+    });
 
-    setEmails(newEmails);
+    setEmails(updated);
     setInputValue("");
-    setError(invalidFound ? "Some entries were invalid or duplicates were ignored." : "");
+    setError(invalidFound ? "Some emails were invalid or duplicates." : "");
   };
 
   const handleKeyDown = (e) => {
-    // Enter / Comma adds chip
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
-      addEmailsFromString(inputValue);
-      return;
-    }
-    // Backspace removes last chip if input empty
-    if (e.key === "Backspace" && inputValue.length === 0 && emails.length > 0) {
+      addEmails(inputValue);
+    } else if (e.key === "Backspace" && inputValue === "" && emails.length) {
       e.preventDefault();
-      const copy = [...emails];
-      copy.pop();
-      setEmails(copy);
+      setEmails(emails.slice(0, -1));
     }
   };
 
@@ -62,116 +53,95 @@ export default function CreateWorkspaceModal({
     const text = e.clipboardData.getData("text");
     if (text.includes(",") || text.includes(" ")) {
       e.preventDefault();
-      addEmailsFromString(text);
+      addEmails(text);
     }
   };
 
-  const removeEmail = (target) => {
-    setEmails(emails.filter((e) => e !== target));
-    setError("");
-    inputRef.current?.focus();
-  };
+  const submit = (e) => {
+    e.preventDefault();
 
-  const submitWrapper = (ev) => {
-    ev.preventDefault();
-    // If there’s leftover text in the input, try to add it first
-    if (inputValue.trim()) addEmailsFromString(inputValue.trim());
+    if (inputValue.trim()) addEmails(inputValue.trim());
 
-    // Validate all current emails once again
-    const bad = emails.filter((e) => !isValidEmail(e));
-    if (bad.length > 0) {
-      setError("Please remove invalid emails before continuing.");
+    const invalid = emails.filter((e) => !isValidEmail(e));
+    if (invalid.length) {
+      setError("Please remove invalid emails before submitting.");
       return;
     }
-    setError("");
-    onCreate(ev); // calls the parent handler (will navigate)
+
+    onCreate(e);
   };
 
   return (
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Backdrop */}
           <motion.div
-            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+            className="fixed inset-0 bg-black/60 backdrop-blur-md z-40"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
           />
 
-          {/* Modal */}
           <motion.div
             initial={{ opacity: 0, scale: 0.9, y: -20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: -20 }}
-            transition={{ duration: 0.3 }}
-            className="fixed z-50 top-1/2 left-1/2 w-[90%] max-w-md -translate-x-1/2 -translate-y-1/2 bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-6 sm:p-8"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="create-project-title"
+            transition={{ duration: 0.25 }}
+            className="fixed top-1/2 left-1/2 w-[90%] max-w-md -translate-x-1/2 -translate-y-1/2 z-50 
+                       bg-gray-800 border border-gray-700 rounded-2xl shadow-2xl p-6"
           >
-            <h2
-              id="create-project-title"
-              className="text-2xl font-bold text-indigo-400 mb-2 text-center"
-            >
-              Create New Project
+            <h2 className="text-2xl font-bold text-indigo-400 text-center mb-3">
+              Create Workspace
             </h2>
-            <p className="text-gray-400 text-sm text-center mb-6">
-              Name your project and invite collaborators via email.
+            <p className="text-gray-400 text-center text-sm mb-6">
+              Add collaborators and start coding together.
             </p>
 
-            <form onSubmit={submitWrapper} className="space-y-5">
-              {/* Project Name */}
+            <form className="space-y-6" onSubmit={submit}>
               <div>
-                <label className="block text-sm text-gray-300 mb-2">
-                  Project Name
-                </label>
+                <label className="text-sm text-gray-300 mb-2 block">Project Name</label>
                 <input
                   type="text"
+                  required
                   value={projectName}
                   onChange={(e) => setProjectName(e.target.value)}
-                  required
-                  placeholder="e.g. AI Chatbot Platform"
-                  className="w-full px-4 py-3 bg-gray-900/70 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition"
+                  placeholder="My Awesome Project"
+                  className="w-full px-4 py-3 rounded-lg bg-gray-900 border border-gray-700 text-gray-200 
+                             focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                 />
               </div>
 
-              {/* Email Chips Input */}
               <div>
-                <label className="block text-sm text-gray-300 mb-2">
-                  Add People (emails)
+                <label className="text-sm text-gray-300 mb-2 block">
+                  Collaborators (Email)
                 </label>
 
                 <div
-                  className={`w-full min-h-[52px] px-3 py-2 flex flex-wrap gap-2 items-center rounded-lg bg-gray-900/70 border ${
-                    error ? "border-red-500" : "border-gray-700"
-                  } focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 transition`}
+                  className={`w-full min-h-[52px] px-3 py-2 flex flex-wrap gap-2 items-center rounded-lg 
+                              bg-gray-900 border ${
+                                error ? "border-red-500" : "border-gray-700"
+                              } focus-within:border-indigo-500`}
                   onClick={() => inputRef.current?.focus()}
                 >
-                  {/* Chips */}
                   {emails.map((email) => (
                     <span
                       key={email}
-                      className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-gray-800 text-gray-200 border border-gray-700 text-sm"
+                      className="px-2.5 py-1 bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-md flex items-center gap-2"
                     >
                       {email}
                       <button
                         type="button"
-                        onClick={() => removeEmail(email)}
-                        className="text-gray-400 hover:text-red-400 focus:outline-none"
-                        aria-label={`Remove ${email}`}
-                        title="Remove"
+                        onClick={() => setEmails(emails.filter((e) => e !== email))}
+                        className="text-gray-400 hover:text-red-400"
                       >
                         ✕
                       </button>
                     </span>
                   ))}
 
-                  {/* Text input for new emails */}
                   <input
                     ref={inputRef}
-                    type="text"
                     value={inputValue}
                     onChange={(e) => {
                       setInputValue(e.target.value);
@@ -179,43 +149,34 @@ export default function CreateWorkspaceModal({
                     }}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
-                    placeholder={
-                      emails.length ? "Type email and press Enter…" : "alice@gmail.com, bob@yahoo.com"
-                    }
-                    className="flex-1 min-w-[160px] bg-transparent outline-none text-gray-200 placeholder-gray-500 py-1"
+                    placeholder="Add emails…"
+                    className="flex-1 min-w-[100px] bg-transparent text-gray-200 outline-none"
                   />
                 </div>
 
-                {/* Helper / Error */}
-                <div className="mt-1 text-xs">
-                  {error ? (
-                    <span className="text-red-400">{error}</span>
-                  ) : (
-                    <span className="text-gray-500">
-                      Press <kbd className="px-1 bg-gray-800 rounded">Enter</kbd> or <kbd className="px-1 bg-gray-800 rounded">,</kbd> to add. Paste multiple emails at once.
-                    </span>
-                  )}
-                </div>
+                {error ? (
+                  <p className="text-red-400 text-xs mt-1">{error}</p>
+                ) : (
+                  <p className="text-gray-500 text-xs mt-1">
+                    Press Enter or comma to add multiple emails.
+                  </p>
+                )}
               </div>
 
-              {/* Actions */}
-              <div className="flex items-center justify-between pt-4">
+              <div className="flex justify-between items-center">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="text-gray-400 hover:text-gray-200 transition text-sm"
+                  className="text-gray-400 hover:text-gray-200"
                 >
                   Cancel
                 </button>
 
                 <motion.button
-                  whileHover={{
-                    scale: 1.05,
-                    boxShadow: "0px 0px 12px rgba(99,102,241,0.5)",
-                  }}
+                  whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.97 }}
                   type="submit"
-                  className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-2 rounded-lg font-semibold transition-all duration-300"
+                  className="bg-indigo-500 hover:bg-indigo-600 text-white px-6 py-2 rounded-lg font-semibold"
                 >
                   Create Workspace
                 </motion.button>

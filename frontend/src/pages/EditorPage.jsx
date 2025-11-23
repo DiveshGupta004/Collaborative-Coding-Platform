@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import { useParams } from "react-router-dom";
+import { useState, useEffect, useRef, useContext } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import { editor as monacoEditor } from "monaco-editor";
 import io from "socket.io-client";
@@ -11,6 +11,8 @@ import StatusBar from "../components/StatusBar";
 import CreateItemModal from "../components/CreateItemModal";
 import { getLanguage } from "../utils/fileUtils";
 import { loadWorkspace } from "../utils/storage";
+import { AuthContext } from "../context/AuthContext";
+import toast from "react-hot-toast";
 
 const SERVER_URL = "http://localhost:4000";
 const makeId = () =>
@@ -18,8 +20,9 @@ const makeId = () =>
 
 export default function EditorPage() {
   const { roomId } = useParams();
+  const navigate = useNavigate();
+  const { user, accessToken } = useContext(AuthContext);
 
-  // States
   const [files, setFiles] = useState([]);
   const [openTabs, setOpenTabs] = useState([]);
   const [activeFile, setActiveFile] = useState(null);
@@ -38,19 +41,83 @@ export default function EditorPage() {
   const [createType, setCreateType] = useState("file");
   const [createParent, setCreateParent] = useState(null);
 
-  // Socket.io (for collaboration readiness)
   const socketRef = useRef(null);
   const debounceRef = useRef(null);
+  const [locked, setLocked] = useState(true); // default locked until auth validated
+  const [connecting, setConnecting] = useState(true);
 
   useEffect(() => {
-    const socket = io(SERVER_URL, { transports: ["websocket"] });
+    if (!roomId) return;
+    setConnecting(true);
+
+    const opts = {
+      transports: ["websocket"],
+      auth: { token: accessToken },
+    };
+    const socket = io(SERVER_URL, opts);
     socketRef.current = socket;
-    socket.emit("join-room", { roomId });
 
-    return () => socket.disconnect();
-  }, [roomId]);
+    socket.on("connect", () => {
+      const payloadUser = user
+        ? { id: user.id || user._id, email: user.email, username: user.username }
+        : null;
 
-  // --- THEME DEFINITIONS ---
+      console.log("Joining Room:", roomId); // 🔥 log here
+
+      socket.emit("join-room", { roomId, user: payloadUser });
+    });
+
+
+    socket.on("load-code", (code) => {
+      const saved = loadWorkspace(roomId) || { files: [], openTabs: [] };
+      const ensureIds = (nodes) =>
+        nodes.map((n) => {
+          if (!n.id) n.id = makeId();
+          if (n.type === "folder") n.children = ensureIds(n.children || []);
+          return n;
+        });
+
+      const workspace = saved.files && saved.files.length ? saved : { files: [{ id: makeId(), name: "main.js", type: "file", content: code || "" }], openTabs: [] };
+      setFiles(ensureIds(workspace.files || []));
+      setOpenTabs(ensureIds(workspace.openTabs || []));
+      setConnecting(false);
+    });
+
+    socket.on("access-denied", (msg) => {
+      toast.error(msg || "Access denied");
+      setLocked(true);
+      setTimeout(() => navigate("/"), 1200);
+    });
+
+    socket.on("receive-changes", (code) => {
+      if (!activeFile) return;
+      setActiveFile((prev) => (prev ? { ...prev, content: code } : prev));
+      setOpenTabs((prev) => prev.map((t) => (t.id === activeFile.id ? { ...t, content: code } : t)));
+    });
+
+    socket.on("connect_error", (err) => {
+      console.error("Socket connect error:", err.message);
+      toast.error("Realtime connection failed");
+      setLocked(true);
+      setConnecting(false);
+    });
+
+    socket.on("joined-authorized", () => {
+      setLocked(false);
+      setConnecting(false);
+      toast.success("Connected to workspace");
+    });
+
+    return () => {
+      socket.off("load-code");
+      socket.off("access-denied");
+      socket.off("receive-changes");
+      socket.off("connect_error");
+      socket.disconnect();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, accessToken, user]);
+
   useEffect(() => {
     if (!monacoEditor) return;
 
@@ -94,7 +161,6 @@ export default function EditorPage() {
     setTheme(savedTheme || "dark-mode");
   }, []);
 
-  // --- APPLY THEME ---
   useEffect(() => {
     if (!theme) return;
     const applyTheme = () => {
@@ -109,7 +175,6 @@ export default function EditorPage() {
     setFadeKey((prev) => prev + 1);
   }, [theme]);
 
-  // --- LOAD WORKSPACE ---
   useEffect(() => {
     const saved = loadWorkspace(roomId) || { files: [], openTabs: [] };
     const ensureIds = (nodes) =>
@@ -121,7 +186,6 @@ export default function EditorPage() {
     setFiles(ensureIds(saved.files || []));
   }, [roomId]);
 
-  // --- TERMINAL RESIZE ---
   useEffect(() => {
     const handleMouseMove = (e) => {
       if (!isResizing) return;
@@ -146,20 +210,28 @@ export default function EditorPage() {
     document.body.style.cursor = "row-resize";
   };
 
-  // --- FILE OPERATIONS ---
   const handleCreateFileClick = (parent = null) => {
+    if (locked) {
+      toast.error("You are not allowed to create files in this workspace.");
+      return;
+    }
     setCreateParent(parent);
     setCreateType("file");
     setShowCreateModal(true);
   };
 
   const handleCreateFolderClick = (parent = null) => {
+    if (locked) {
+      toast.error("You are not allowed to create folders in this workspace.");
+      return;
+    }
     setCreateParent(parent);
     setCreateType("folder");
     setShowCreateModal(true);
   };
 
   const handleCreateFile = (parent = null, fileName) => {
+    if (locked) return;
     const newFile = { id: makeId(), name: fileName, type: "file", content: "" };
     if (parent && parent.type === "folder") {
       const addTo = (nodes) =>
@@ -167,8 +239,8 @@ export default function EditorPage() {
           n.id === parent.id
             ? { ...n, children: [...(n.children || []), newFile] }
             : n.type === "folder"
-            ? { ...n, children: addTo(n.children || []) }
-            : n
+              ? { ...n, children: addTo(n.children || []) }
+              : n
         );
       setFiles((prev) => addTo(prev));
     } else {
@@ -180,6 +252,7 @@ export default function EditorPage() {
   };
 
   const handleCreateFolder = (parent = null, folderName) => {
+    if (locked) return;
     const newFolder = {
       id: makeId(),
       name: folderName,
@@ -192,8 +265,8 @@ export default function EditorPage() {
           n.id === parent.id
             ? { ...n, children: [...(n.children || []), newFolder] }
             : n.type === "folder"
-            ? { ...n, children: addTo(n.children || []) }
-            : n
+              ? { ...n, children: addTo(n.children || []) }
+              : n
         );
       setFiles((prev) => addTo(prev));
     } else {
@@ -202,6 +275,10 @@ export default function EditorPage() {
   };
 
   const handleDelete = (target) => {
+    if (locked) {
+      toast.error("You are not allowed to delete items in this workspace.");
+      return;
+    }
     const deleteRecursively = (nodes) =>
       nodes
         .filter((n) => n.id !== target.id)
@@ -228,7 +305,6 @@ export default function EditorPage() {
     if (activeFile?.id === file.id) setActiveFile(null);
   };
 
-  // --- RUN / TERMINAL ---
   const handleRun = () => {
     if (!activeFile) return;
     setShowTerminal(true);
@@ -240,10 +316,7 @@ export default function EditorPage() {
         { text: String(result ?? "Executed successfully."), type: "success" },
       ]);
     } catch (err) {
-      setOutput((prev) => [
-        ...prev,
-        { text: String(err), type: "error" },
-      ]);
+      setOutput((prev) => [...prev, { text: String(err), type: "error" }]);
     }
     setTimeout(() => {
       terminalRef.current?.scrollTo({
@@ -260,20 +333,24 @@ export default function EditorPage() {
   };
 
   const getLogColor = (type) =>
-    type === "error"
-      ? "text-red-400"
-      : type === "success"
-      ? "text-green-400"
-      : "text-gray-300";
+    type === "error" ? "text-red-400" : type === "success" ? "text-green-400" : "text-gray-300";
+
+  const handleEditorChange = (value) => {
+    if (locked) return;
+    if (!activeFile) return;
+    setActiveFile({ ...activeFile, content: value });
+    setOpenTabs((prev) => prev.map((t) => (t.id === activeFile.id ? { ...t, content: value } : t)));
+
+    if (socketRef.current && socketRef.current.connected) {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        socketRef.current.emit("code-change", { roomId, code: value });
+      }, 200);
+    }
+  };
 
   return (
-    <div
-      className={`h-screen flex flex-col ${
-        theme === "dark-mode"
-          ? "bg-gray-900 text-white"
-          : "bg-gray-50 text-gray-900"
-      }`}
-    >
+    <div className={`h-screen flex flex-col ${theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-50 text-gray-900"}`}>
       <div className="flex flex-1 overflow-hidden">
         <ActivityBar theme={theme} setTheme={setTheme} />
         <Sidebar
@@ -286,25 +363,13 @@ export default function EditorPage() {
           theme={theme}
         />
 
-        {/* Main Editor */}
         <div key={fadeKey} className="flex-1 flex flex-col transition-opacity duration-500">
-          {/* Tabs */}
-          <div
-            className={`flex items-center border-b ${
-              theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
-            }`}
-          >
+          <div className={`flex items-center border-b ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"}`}>
             {openTabs.map((tab) => (
               <div
                 key={tab.id}
                 onClick={() => openFile(tab)}
-                className={`flex items-center gap-2 px-3 py-2 text-sm border-r cursor-pointer ${
-                  activeFile?.id === tab.id
-                    ? "bg-indigo-500 text-white"
-                    : theme === "dark-mode"
-                    ? "text-gray-400 hover:bg-gray-800"
-                    : "text-gray-700 hover:bg-gray-200"
-                }`}
+                className={`flex items-center gap-2 px-3 py-2 text-sm border-r cursor-pointer ${activeFile?.id === tab.id ? "bg-indigo-500 text-white" : theme === "dark-mode" ? "text-gray-400 hover:bg-gray-800" : "text-gray-700 hover:bg-gray-200"}`}
               >
                 <span>{tab.name}</span>
                 <FiX
@@ -318,7 +383,6 @@ export default function EditorPage() {
             ))}
           </div>
 
-          {/* Monaco Editor */}
           <div className="flex-1 overflow-hidden">
             {activeFile ? (
               <Editor
@@ -331,80 +395,48 @@ export default function EditorPage() {
                   monaco.editor.setTheme(theme);
                   setTimeout(() => editor.layout(), 100);
                 }}
-                onChange={(value) => {
-                  setActiveFile({ ...activeFile, content: value });
-                  setOpenTabs((prev) =>
-                    prev.map((t) =>
-                      t.id === activeFile.id ? { ...t, content: value } : t
-                    )
-                  );
-                }}
+                onChange={handleEditorChange}
                 options={{
                   minimap: { enabled: true },
                   fontSize: 14,
                   automaticLayout: true,
                   smoothScrolling: true,
                   scrollBeyondLastLine: false,
+                  readOnly: locked,
                 }}
               />
             ) : (
               <div className="flex items-center justify-center h-full text-gray-500 select-none">
-                Select or create a file to start coding.
+                {locked ? "You are not authorized to view this workspace." : "Select or create a file to start coding."}
               </div>
             )}
           </div>
 
-          {/* Toolbar */}
-          <div
-            className={`flex items-center justify-between px-4 py-2 border-t ${
-              theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
-            }`}
-          >
+          <div className={`flex items-center justify-between px-4 py-2 border-t ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"}`}>
             <button
               onClick={handleRun}
               className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-1.5 rounded-md text-sm"
+              disabled={locked}
             >
               <FiPlay /> Run
             </button>
 
-            <button
-              onClick={handleCopyLink}
-              className="flex items-center gap-2 text-gray-400 hover:text-indigo-400"
-            >
+            <button onClick={handleCopyLink} className="flex items-center gap-2 text-gray-400 hover:text-indigo-400">
               {copied ? <FiCheck /> : <FiCopy />} Share
             </button>
           </div>
 
-          {/* Terminal */}
           {showTerminal && (
             <>
-              <div
-                onMouseDown={handleMouseDown}
-                className="h-2 cursor-row-resize bg-gray-700"
-              ></div>
-              <div
-                style={{ height: terminalHeight }}
-                className={`border-t ${
-                  theme === "dark-mode"
-                    ? "border-gray-800 bg-gray-900"
-                    : "border-gray-300 bg-gray-50"
-                }`}
-              >
+              <div onMouseDown={handleMouseDown} className="h-2 cursor-row-resize bg-gray-700"></div>
+              <div style={{ height: terminalHeight }} className={`border-t ${theme === "dark-mode" ? "border-gray-800 bg-gray-900" : "border-gray-300 bg-gray-50"}`}>
                 <div className="flex justify-between items-center px-3 py-1 border-b border-gray-700 bg-gray-800/70 text-sm">
                   <span className="text-gray-400 select-none">TERMINAL</span>
-                  <button
-                    onClick={() => setShowTerminal(false)}
-                    className="text-gray-400 hover:text-red-400 transition"
-                    title="Close Terminal"
-                  >
+                  <button onClick={() => setShowTerminal(false)} className="text-gray-400 hover:text-red-400 transition" title="Close Terminal">
                     <FiX size={16} />
                   </button>
                 </div>
-                <div
-                  ref={terminalRef}
-                  className="p-3 text-sm font-mono overflow-y-auto h-full space-y-1 pr-4"
-                  style={{ scrollbarGutter: "stable" }}
-                >
+                <div ref={terminalRef} className="p-3 text-sm font-mono overflow-y-auto h-full space-y-1 pr-4" style={{ scrollbarGutter: "stable" }}>
                   {output.length === 0 ? (
                     <p className="text-gray-400">Terminal ready...</p>
                   ) : (
@@ -423,7 +455,6 @@ export default function EditorPage() {
         </div>
       </div>
 
-      {/* Modal */}
       <CreateItemModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}

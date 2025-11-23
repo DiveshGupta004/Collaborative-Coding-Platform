@@ -1,14 +1,27 @@
-import { useState, useContext } from "react";
+import { useState, useContext, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { FiMenu, FiX } from "react-icons/fi";
 import { AuthContext } from "../context/AuthContext";
+import toast from "react-hot-toast";
 
 export default function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
   const [dropdown, setDropdown] = useState(false);
 
   const { user, logout } = useContext(AuthContext);
+
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const getInitial = (name) => {
     if (!name) return "U";
@@ -18,8 +31,6 @@ export default function Navbar() {
   return (
     <header className="fixed top-0 left-0 w-full z-50 bg-gray-900/90 backdrop-blur-md border-b border-gray-800 shadow-md">
       <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-
-        {/* Logo */}
         <Link
           to="/"
           className="text-2xl font-extrabold text-indigo-400 tracking-wide"
@@ -27,10 +38,7 @@ export default function Navbar() {
           CodeMate.
         </Link>
 
-        {/* Desktop Menu */}
         <div className="hidden md:flex items-center space-x-4">
-
-          {/* If NOT logged in */}
           {!user && (
             <>
               <Link
@@ -39,7 +47,6 @@ export default function Navbar() {
               >
                 Login
               </Link>
-
               <Link
                 to="/signup"
                 className="bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-2 rounded-md text-sm font-semibold shadow-md transition-all duration-300"
@@ -49,9 +56,8 @@ export default function Navbar() {
             </>
           )}
 
-          {/* If LOGGED IN */}
           {user && (
-            <div className="relative">
+            <div className="relative" ref={dropdownRef}>
               <motion.div
                 whileHover={{ scale: 1.05 }}
                 onClick={() => setDropdown(!dropdown)}
@@ -77,7 +83,11 @@ export default function Navbar() {
                     </div>
 
                     <button
-                      onClick={logout}
+                      onClick={() => {
+                        logout();
+                        setDropdown(false);
+                        toast.success("Logged out successfully");
+                      }}
                       className="w-full text-left px-4 py-2 text-gray-200 hover:bg-gray-700 transition"
                     >
                       Logout
@@ -89,7 +99,6 @@ export default function Navbar() {
           )}
         </div>
 
-        {/* Hamburger Menu */}
         <button
           className="md:hidden text-gray-300 text-2xl"
           onClick={() => setIsOpen(!isOpen)}
@@ -98,7 +107,6 @@ export default function Navbar() {
         </button>
       </div>
 
-      {/* Mobile Menu */}
       <AnimatePresence>
         {isOpen && (
           <motion.div
@@ -109,8 +117,6 @@ export default function Navbar() {
             className="md:hidden bg-gray-900 border-t border-gray-800 py-6"
           >
             <div className="flex flex-col items-center space-y-4">
-
-              {/* NOT LOGGED IN */}
               {!user && (
                 <>
                   <Link
@@ -131,18 +137,20 @@ export default function Navbar() {
                 </>
               )}
 
-              {/* LOGGED IN - Mobile */}
               {user && (
                 <>
                   <div className="text-center text-gray-300">
                     Logged in as <br />
-                    <span className="text-white font-bold text-lg">{user.username}</span>
+                    <span className="text-white font-bold text-lg">
+                      {user.username}
+                    </span>
                   </div>
 
                   <button
                     onClick={() => {
                       logout();
                       setIsOpen(false);
+                      toast.success("Logged out successfully");
                     }}
                     className="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-md font-medium shadow-md transition-all duration-300"
                   >

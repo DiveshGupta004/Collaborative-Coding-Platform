@@ -6,36 +6,44 @@ export const AuthContext = createContext();
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [accessToken, setAccessToken] = useState(null);
+  const [loading, setLoading] = useState(true); // ⬅ prevents flicker
 
-  // 🔹 LOGIN — Save user + token securely
+  const tryAutoLogin = async () => {
+    try {
+      const res = await api.get("/auth/refresh"); // 🔥 cookie is sent automatically
+      setAccessToken(res.data.accessToken);
+
+      // Get user details again
+      const u = JSON.parse(localStorage.getItem("user"));
+      if (u) setUser(u);
+    } catch (err) {
+      setUser(null);
+      setAccessToken(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const login = ({ user, accessToken }) => {
     setUser(user);
     setAccessToken(accessToken);
-
-    // store only user, not token
     localStorage.setItem("user", JSON.stringify(user));
   };
 
-  // 🔹 LOGOUT — delete everything
   const logout = async () => {
     try {
       await api.post("/auth/logout", {}, { withCredentials: true });
-    } catch (err) {}
-
+    } catch {}
     setUser(null);
     setAccessToken(null);
-
     localStorage.removeItem("user");
   };
 
-  // 🔹 Auto-load user on refresh
   useEffect(() => {
-    const storedUser = localStorage.getItem("user");
-
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
+    tryAutoLogin(); // 🔥 restore login on page load
   }, []);
+
+  if (loading) return null; // prevents temporary logout flash
 
   return (
     <AuthContext.Provider value={{ user, accessToken, login, logout }}>
