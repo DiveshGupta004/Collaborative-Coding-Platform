@@ -1,63 +1,94 @@
-import Room from "../models/Room.js";
+// backend/sockets/editorSocket.js
 import Workspace from "../models/Workspace.js";
+import jwt from "jsonwebtoken";
+import { runProjectStream } from "../runners/execRunner.js";
+import { v4 as uuidv4 } from "uuid";
 
 export default function editorSocket(socket, io) {
-  console.log("🔌 User connected:", socket.id);
+  // auth attach
+  if (socket.handshake?.auth?.token) {
+    try {
+      const decoded = jwt.verify(
+        socket.handshake.auth.token,
+        process.env.JWT_SECRET || "secret"
+      );
+      socket.user = decoded;
+    } catch (e) {}
+  }
 
+  // join-room
   socket.on("join-room", async ({ roomId, user }) => {
     try {
-      console.log("JOIN-ROOM received:", roomId, user?.email);
-      if (!roomId) {
-        socket.emit("access-denied", "Missing roomId.");
-        return;
-      }
-      if (!user || !user.email) {
-        socket.emit("access-denied", "Invalid user.");
-        return;
-      }
-
-      const workspace = await Workspace.findOne({ roomId });
-      if (!workspace) {
-        socket.emit("access-denied", "Workspace not found.");
-        return;
-      }
-
-      const ownerEmail = workspace.owner?.email?.toLowerCase();
-      const userEmail = (user.email || "").toLowerCase();
-      const allowed = workspace.allowedUsers.map((e) => String(e).toLowerCase());
-
-      const isAllowed = userEmail === ownerEmail || allowed.includes(userEmail);
-      if (!isAllowed) {
-        socket.emit("access-denied", "You are not allowed to join this workspace.");
-        return;
-      }
-
       socket.join(roomId);
+      socket.roomId = roomId;
+      socket.user = user || socket.user || null;
 
-      let room = await Room.findOne({ roomId });
-      if (!room) room = await Room.create({ roomId, code: "" });
+      let workspaceDoc = null;
+      try {
+        workspaceDoc = await Workspace.findOne({ roomId }).lean();
+      } catch {}
 
-      socket.emit("joined-authorized");
-      socket.emit("load-code", room.code);
-      socket.to(roomId).emit("user-joined", { email: userEmail });
+      const code =
+        workspaceDoc?.files?.length && workspaceDoc.files[0]?.content
+          ? workspaceDoc.files[0].content
+          : "";
 
-      console.log(`✔ ${userEmail} joined ${roomId}`);
+      socket.emit("load-code", code);
+      io.to(socket.id).emit("joined-authorized");
     } catch (err) {
-      console.error("JOIN ERROR:", err);
-      socket.emit("access-denied", "Server error.");
+      socket.emit("access-denied", "Unable to join room");
     }
   });
 
-  socket.on("code-change", async ({ roomId, code }) => {
-    try {
-      socket.to(roomId).emit("receive-changes", code);
-      await Room.findOneAndUpdate({ roomId }, { code }, { upsert: true });
-    } catch (err) {
-      console.error("CODE UPDATE ERROR:", err);
-    }
+  socket.on("code-change", ({ roomId, code }) => {
+    if (!roomId) return;
+    socket.to(roomId).emit("receive-changes", code);
   });
 
-  socket.on("disconnect", () => {
-    console.log("❌ User disconnected:", socket.id);
-  });
+  // RUN PROJECT
+  socket.on(
+    "run-project",
+    async ({ roomId, files, entry, language, timeout }) => {
+      try {
+        if (!roomId || !files || !entry || !language) {
+          socket.emit("run-output", {
+            runId: null,
+            text: "Invalid run request\n",
+          });
+          return;
+        }
+
+        if (!socket.rooms.has(roomId)) {
+          socket.emit("run-output", {
+            runId: null,
+            text: "You are not in this room.\n",
+          });
+          return;
+        }
+
+        const runId = uuidv4();
+
+        runProjectStream({
+          files,
+          entry,
+          language,
+          socket,
+          runId,
+          timeout: timeout || 15000,
+        });
+
+        io.to(roomId).emit("run-started", {
+          runId,
+          startedBy: socket.user?.username || socket.id,
+        });
+      } catch (err) {
+        socket.emit("run-output", {
+          runId: null,
+          text: `Run error: ${String(err)}\n`,
+        });
+      }
+    }
+  );
+
+  socket.on("disconnect", () => {});
 }

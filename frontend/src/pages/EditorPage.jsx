@@ -10,13 +10,67 @@ import ActivityBar from "../components/ActivityBar";
 import StatusBar from "../components/StatusBar";
 import CreateItemModal from "../components/CreateItemModal";
 import { getLanguage } from "../utils/fileUtils";
-import { loadWorkspace } from "../utils/storage";
+import { saveWorkspace, loadWorkspace } from "../utils/storage";
 import { AuthContext } from "../context/AuthContext";
 import toast from "react-hot-toast";
 
 const SERVER_URL = "http://localhost:4000";
 const makeId = () =>
   `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+
+/* Flatten files for runner: returns [{ name: 'src/index.js', content: '...' }, ...] */
+function filesFlatList(tree) {
+  const out = [];
+  function walk(nodes, prefix = "") {
+    for (const n of nodes) {
+      if (!n) continue;
+      if (n.type === "file") out.push({ name: prefix + n.name, content: n.content || "" });
+      else if (n.type === "folder") walk(n.children || [], prefix + n.name + "/");
+    }
+  }
+  walk(tree, "");
+  return out;
+}
+
+/* find file in tree by id */
+function findFileById(tree, id) {
+  for (const n of tree) {
+    if (!n) continue;
+    if (n.id === id) return n;
+    if (n.type === "folder") {
+      const r = findFileById(n.children || [], id);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+/* compute full relative path for a file id (e.g. "src/utils/index.js") */
+function getFullPathById(targetId, tree, prefix = "") {
+  for (const node of tree) {
+    if (!node) continue;
+    if (node.id === targetId) return prefix + node.name;
+    if (node.type === "folder") {
+      const res = getFullPathById(targetId, node.children || [], prefix + node.name + "/");
+      if (res) return res;
+    }
+  }
+  return null;
+}
+
+/* update file content in the tree (immutable) */
+function updateFileContent(tree, targetId, newContent) {
+  return tree.map((node) => {
+    if (!node) return node;
+    if (node.id === targetId && node.type === "file") {
+      return { ...node, content: newContent };
+    }
+    if (node.type === "folder") {
+      return { ...node, children: updateFileContent(node.children || [], targetId, newContent) };
+    }
+    return node;
+  });
+}
 
 export default function EditorPage() {
   const { roomId } = useParams();
@@ -34,418 +88,346 @@ export default function EditorPage() {
   const [terminalHeight, setTerminalHeight] = useState(200);
   const [isResizing, setIsResizing] = useState(false);
   const [fadeKey, setFadeKey] = useState(0);
+
   const terminalRef = useRef(null);
   const editorRef = useRef(null);
+  const socketRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  const activeFileRef = useRef(null); // keep current activeFile for socket callbacks
+  useEffect(() => { activeFileRef.current = activeFile; }, [activeFile]);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createType, setCreateType] = useState("file");
   const [createParent, setCreateParent] = useState(null);
 
-  const socketRef = useRef(null);
-  const debounceRef = useRef(null);
-  const [locked, setLocked] = useState(true); // default locked until auth validated
+  const [locked, setLocked] = useState(true);
   const [connecting, setConnecting] = useState(true);
 
+  // ─────────────────────────────────────────────
+  // SOCKET SETUP (create once per room/user)
+  // ─────────────────────────────────────────────
   useEffect(() => {
     if (!roomId) return;
-    setConnecting(true);
 
-    const opts = {
+    const socket = io(SERVER_URL, {
       transports: ["websocket"],
       auth: { token: accessToken },
-    };
-    const socket = io(SERVER_URL, opts);
+    });
     socketRef.current = socket;
 
-    socket.on("connect", () => {
-      const payloadUser = user
-        ? { id: user.id || user._id, email: user.email, username: user.username }
-        : null;
-
-      console.log("Joining Room:", roomId); // 🔥 log here
-
+    const onConnect = () => {
+      const payloadUser = user ? { id: user.id || user._id, email: user.email, username: user.username } : null;
       socket.emit("join-room", { roomId, user: payloadUser });
-    });
+    };
 
+    const onLoadCode = () => {
+      const saved = loadWorkspace(roomId) || { files: [], openTabs: [], activeFileId: null };
 
-    socket.on("load-code", (code) => {
-      const saved = loadWorkspace(roomId) || { files: [], openTabs: [] };
+      // ensure ids exist
       const ensureIds = (nodes) =>
-        nodes.map((n) => {
+        (nodes || []).map((n) => {
           if (!n.id) n.id = makeId();
           if (n.type === "folder") n.children = ensureIds(n.children || []);
           return n;
         });
 
-      const workspace = saved.files && saved.files.length ? saved : { files: [{ id: makeId(), name: "main.js", type: "file", content: code || "" }], openTabs: [] };
-      setFiles(ensureIds(workspace.files || []));
-      setOpenTabs(ensureIds(workspace.openTabs || []));
-      setConnecting(false);
-    });
+      const loadedFiles = ensureIds(saved.files || []);
+      const loadedTabs = ensureIds(saved.openTabs || []);
 
-    socket.on("access-denied", (msg) => {
-      toast.error(msg || "Access denied");
-      setLocked(true);
-      setTimeout(() => navigate("/"), 1200);
-    });
+      setFiles(loadedFiles);
+      setOpenTabs(loadedTabs);
 
-    socket.on("receive-changes", (code) => {
-      if (!activeFile) return;
-      setActiveFile((prev) => (prev ? { ...prev, content: code } : prev));
-      setOpenTabs((prev) => prev.map((t) => (t.id === activeFile.id ? { ...t, content: code } : t)));
-    });
-
-    socket.on("connect_error", (err) => {
-      console.error("Socket connect error:", err.message);
-      toast.error("Realtime connection failed");
-      setLocked(true);
-      setConnecting(false);
-    });
-
-    socket.on("joined-authorized", () => {
-      setLocked(false);
-      setConnecting(false);
-      toast.success("Connected to workspace");
-    });
-
-    return () => {
-      socket.off("load-code");
-      socket.off("access-denied");
-      socket.off("receive-changes");
-      socket.off("connect_error");
-      socket.disconnect();
+      // restore active file by id -> find the actual object inside loadedTabs or files
+      if (saved.activeFileId) {
+        const foundInTabs = findFileById(loadedTabs, saved.activeFileId);
+        const foundInFiles = findFileById(loadedFiles, saved.activeFileId);
+        const fileObj = foundInTabs || foundInFiles;
+        if (fileObj) {
+          setActiveFile(fileObj);
+          setLanguage(getLanguage(fileObj.name));
+        }
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, accessToken, user]);
 
+    const onJoined = () => { setLocked(false); setConnecting(false); };
+    const onAccessDenied = (msg) => { toast.error(msg || "Access denied"); setLocked(true); setTimeout(() => navigate("/"), 1000); };
+
+    const onReceiveChanges = (code) => {
+      // update activeFile content safely using ref to avoid stale closure
+      const current = activeFileRef.current;
+      if (!current) return;
+      // update activeFile and files tree & openTabs
+      setActiveFile((prev) => (prev ? { ...prev, content: code } : prev));
+      setOpenTabs((prev) => prev.map((t) => (t.id === current.id ? { ...t, content: code } : t)));
+      setFiles((prev) => updateFileContent(prev, current.id, code));
+    };
+
+    const onRunStarted = ({ runId }) => {
+      setOutput((prev) => {
+        // avoid duplicate run-start messages if any
+        if (prev.length && String(prev[prev.length - 1].text || "").includes(String(runId))) return prev;
+        return [...prev, { text: `🔵 Run started: ${runId}\n`, type: "info" }];
+      });
+      setShowTerminal(true);
+    };
+
+    const onRunOutput = ({ text, isErr }) => {
+      setOutput((prev) => [...prev, { text: String(text), type: isErr ? "error" : "stream" }]);
+      // scroll
+      setTimeout(() => terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight, behavior: "smooth" }), 30);
+    };
+
+    const onRunFinished = ({ code, timedOut }) => {
+      setOutput((prev) => [...prev, { text: `\n🟢 Run finished. Exit code: ${code}${timedOut ? " (Timed out)" : ""}\n`, type: "info" }]);
+    };
+
+    // register
+    socket.on("connect", onConnect);
+    socket.on("load-code", onLoadCode);
+    socket.on("joined-authorized", onJoined);
+    socket.on("access-denied", onAccessDenied);
+    socket.on("receive-changes", onReceiveChanges);
+    socket.on("run-started", onRunStarted);
+    socket.on("run-output", onRunOutput);
+    socket.on("run-finished", onRunFinished);
+
+    // cleanup
+    return () => {
+      try {
+        socket.off("connect", onConnect);
+        socket.off("load-code", onLoadCode);
+        socket.off("joined-authorized", onJoined);
+        socket.off("access-denied", onAccessDenied);
+        socket.off("receive-changes", onReceiveChanges);
+        socket.off("run-started", onRunStarted);
+        socket.off("run-output", onRunOutput);
+        socket.off("run-finished", onRunFinished);
+        socket.disconnect();
+      } catch (e) {
+        // ignore
+      }
+    };
+    // intentionally DO NOT include activeFile in deps to avoid reconnect on typing
+  }, [roomId, accessToken, user, navigate]);
+
+  // ─────────────────────────────────────────────
+  // THEME
+  // ─────────────────────────────────────────────
   useEffect(() => {
     if (!monacoEditor) return;
-
-    monacoEditor.defineTheme("dark-mode", {
-      base: "vs-dark",
-      inherit: true,
-      rules: [
-        { token: "", foreground: "D4D4D4", background: "111827" },
-        { token: "comment", foreground: "6A9955", fontStyle: "italic" },
-        { token: "keyword", foreground: "C586C0" },
-        { token: "number", foreground: "B5CEA8" },
-        { token: "string", foreground: "CE9178" },
-      ],
-      colors: {
-        "editor.background": "#111827",
-        "editorLineNumber.foreground": "#6b7280",
-        "editorCursor.foreground": "#93c5fd",
-        "editor.lineHighlightBackground": "#1f2937",
-      },
-    });
-
-    monacoEditor.defineTheme("light-mode", {
-      base: "vs",
-      inherit: true,
-      rules: [
-        { token: "", foreground: "000000", background: "f9fafb" },
-        { token: "comment", foreground: "008000", fontStyle: "italic" },
-        { token: "keyword", foreground: "0000FF" },
-        { token: "number", foreground: "098658" },
-        { token: "string", foreground: "A31515" },
-      ],
-      colors: {
-        "editor.background": "#f9fafb",
-        "editorLineNumber.foreground": "#9ca3af",
-        "editorCursor.foreground": "#2563eb",
-        "editor.lineHighlightBackground": "#E5E7EB",
-      },
-    });
-
-    const savedTheme = localStorage.getItem("editor-theme");
-    setTheme(savedTheme || "dark-mode");
+    monacoEditor.defineTheme("dark-mode", { base: "vs-dark", inherit: true, rules: [], colors: { "editor.background": "#111827" } });
+    monacoEditor.defineTheme("light-mode", { base: "vs", inherit: true, rules: [], colors: { "editor.background": "#f9fafb" } });
+    setTheme(localStorage.getItem("editor-theme") || "dark-mode");
   }, []);
 
   useEffect(() => {
-    if (!theme) return;
-    const applyTheme = () => {
-      monacoEditor.setTheme(theme);
-      if (editorRef.current) {
-        editorRef.current.updateOptions({ theme });
-        editorRef.current.layout();
-      }
-    };
-    setTimeout(applyTheme, 50);
-    localStorage.setItem("editor-theme", theme);
-    setFadeKey((prev) => prev + 1);
+    try { monacoEditor.setTheme(theme); localStorage.setItem("editor-theme", theme); setFadeKey((p) => p + 1); } catch (e) {}
   }, [theme]);
 
+  // ─────────────────────────────────────────────
+  // AUTO-SAVE workspace
+  // ─────────────────────────────────────────────
   useEffect(() => {
-    const saved = loadWorkspace(roomId) || { files: [], openTabs: [] };
-    const ensureIds = (nodes) =>
-      nodes.map((n) => {
-        if (!n.id) n.id = makeId();
-        if (n.type === "folder") n.children = ensureIds(n.children || []);
+    if (!roomId) return;
+    saveWorkspace(roomId, { files, openTabs, activeFileId: activeFile?.id || null });
+  }, [files, openTabs, activeFile, roomId]);
+
+  // ─────────────────────────────────────────────
+  // FILE OPERATIONS
+  // ─────────────────────────────────────────────
+  const handleCreateFile = (parent, name) => {
+    const file = { id: makeId(), name, type: "file", content: "" };
+    if (parent?.type === "folder") {
+      const add = (nodes) => nodes.map((n) => {
+        if (n.id === parent.id) return { ...n, children: [...(n.children || []), file] };
+        if (n.type === "folder") return { ...n, children: add(n.children || []) };
         return n;
       });
-    setFiles(ensureIds(saved.files || []));
-  }, [roomId]);
+      setFiles((prev) => add(prev));
+    } else setFiles((prev) => [...prev, file]);
 
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      if (!isResizing) return;
-      const newHeight = Math.max(100, window.innerHeight - e.clientY);
-      setTerminalHeight(newHeight);
-    };
-    const handleMouseUp = () => {
-      if (isResizing) setIsResizing(false);
-      document.body.style.cursor = "default";
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [isResizing]);
-
-  const handleMouseDown = (e) => {
-    e.preventDefault();
-    setIsResizing(true);
-    document.body.style.cursor = "row-resize";
+    setOpenTabs((prev) => [...prev, file]);
+    setActiveFile(file);
+    setLanguage(getLanguage(name));
   };
 
-  const handleCreateFileClick = (parent = null) => {
-    if (locked) {
-      toast.error("You are not allowed to create files in this workspace.");
-      return;
-    }
-    setCreateParent(parent);
-    setCreateType("file");
-    setShowCreateModal(true);
-  };
-
-  const handleCreateFolderClick = (parent = null) => {
-    if (locked) {
-      toast.error("You are not allowed to create folders in this workspace.");
-      return;
-    }
-    setCreateParent(parent);
-    setCreateType("folder");
-    setShowCreateModal(true);
-  };
-
-  const handleCreateFile = (parent = null, fileName) => {
-    if (locked) return;
-    const newFile = { id: makeId(), name: fileName, type: "file", content: "" };
-    if (parent && parent.type === "folder") {
-      const addTo = (nodes) =>
-        nodes.map((n) =>
-          n.id === parent.id
-            ? { ...n, children: [...(n.children || []), newFile] }
-            : n.type === "folder"
-              ? { ...n, children: addTo(n.children || []) }
-              : n
-        );
-      setFiles((prev) => addTo(prev));
-    } else {
-      setFiles((prev) => [...prev, newFile]);
-    }
-    setOpenTabs((prev) => [...prev, newFile]);
-    setActiveFile(newFile);
-    setLanguage(getLanguage(fileName));
-  };
-
-  const handleCreateFolder = (parent = null, folderName) => {
-    if (locked) return;
-    const newFolder = {
-      id: makeId(),
-      name: folderName,
-      type: "folder",
-      children: [],
-    };
-    if (parent && parent.type === "folder") {
-      const addTo = (nodes) =>
-        nodes.map((n) =>
-          n.id === parent.id
-            ? { ...n, children: [...(n.children || []), newFolder] }
-            : n.type === "folder"
-              ? { ...n, children: addTo(n.children || []) }
-              : n
-        );
-      setFiles((prev) => addTo(prev));
-    } else {
-      setFiles((prev) => [...prev, newFolder]);
-    }
+  const handleCreateFolder = (parent, name) => {
+    const folder = { id: makeId(), name, type: "folder", children: [] };
+    if (parent?.type === "folder") {
+      const add = (nodes) => nodes.map((n) => {
+        if (n.id === parent.id) return { ...n, children: [...(n.children || []), folder] };
+        if (n.type === "folder") return { ...n, children: add(n.children || []) };
+        return n;
+      });
+      setFiles((prev) => add(prev));
+    } else setFiles((prev) => [...prev, folder]);
   };
 
   const handleDelete = (target) => {
-    if (locked) {
-      toast.error("You are not allowed to delete items in this workspace.");
-      return;
-    }
-    const deleteRecursively = (nodes) =>
+    const remove = (nodes) =>
       nodes
         .filter((n) => n.id !== target.id)
-        .map((n) =>
-          n.type === "folder"
-            ? { ...n, children: deleteRecursively(n.children || []) }
-            : n
-        );
-    setFiles((prev) => deleteRecursively(prev));
+        .map((n) => (n.type === "folder" ? { ...n, children: remove(n.children || []) } : n));
+    setFiles((prev) => remove(prev));
     setOpenTabs((prev) => prev.filter((t) => t.id !== target.id));
     if (activeFile?.id === target.id) setActiveFile(null);
   };
 
   const openFile = (file) => {
-    setActiveFile(file);
+    // ensure the object used for activeFile is the one in files tree (keeps updates consistent)
+    const fromTree = findFileById(files, file.id) || file;
+    setActiveFile(fromTree);
     setLanguage(getLanguage(file.name));
-    setOpenTabs((prev) =>
-      prev.some((t) => t.id === file.id) ? prev : [...prev, file]
-    );
+
+    setOpenTabs((prev) => (prev.some((t) => t.id === file.id) ? prev : [...prev, fromTree]));
   };
 
-  const closeTab = (file) => {
-    setOpenTabs((prev) => prev.filter((t) => t.id !== file.id));
-    if (activeFile?.id === file.id) setActiveFile(null);
+  const closeTab = (f) => {
+    setOpenTabs((prev) => prev.filter((t) => t.id !== f.id));
+    if (activeFile?.id === f.id) setActiveFile(null);
   };
 
+  // ─────────────────────────────────────────────
+  // RUN CODE: use full path resolution
+  // ─────────────────────────────────────────────
   const handleRun = () => {
     if (!activeFile) return;
-    setShowTerminal(true);
-    try {
-      // eslint-disable-next-line no-eval
-      const result = eval(activeFile.content);
-      setOutput((prev) => [
-        ...prev,
-        { text: String(result ?? "Executed successfully."), type: "success" },
-      ]);
-    } catch (err) {
-      setOutput((prev) => [...prev, { text: String(err), type: "error" }]);
+    if (!socketRef.current?.connected) {
+      setOutput((p) => [...p, { text: "Not connected\n", type: "error" }]);
+      setShowTerminal(true);
+      return;
     }
-    setTimeout(() => {
-      terminalRef.current?.scrollTo({
-        top: terminalRef.current.scrollHeight,
-        behavior: "smooth",
-      });
-    }, 100);
+
+    const allFiles = filesFlatList(files);
+    const entry = getFullPathById(activeFile.id, files);
+    const lang = getLanguage(activeFile.name);
+
+    if (!entry) {
+      setOutput((p) => [...p, { text: "Entry file path not found\n", type: "error" }]);
+      setShowTerminal(true);
+      return;
+    }
+
+    setOutput([]);
+    setShowTerminal(true);
+
+    socketRef.current.emit("run-project", { roomId, files: allFiles, entry, language: lang, timeout: 15000 });
   };
 
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(window.location.href);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
+  // ─────────────────────────────────────────────
+  // EDITOR CHANGE: update activeFile, openTabs and files tree
+  // ─────────────────────────────────────────────
+  const handleEditorChange = (val) => {
+    if (locked || !activeFile) return;
 
-  const getLogColor = (type) =>
-    type === "error" ? "text-red-400" : type === "success" ? "text-green-400" : "text-gray-300";
+    // update files tree content
+    setFiles((prev) => updateFileContent(prev, activeFile.id, val));
 
-  const handleEditorChange = (value) => {
-    if (locked) return;
-    if (!activeFile) return;
-    setActiveFile({ ...activeFile, content: value });
-    setOpenTabs((prev) => prev.map((t) => (t.id === activeFile.id ? { ...t, content: value } : t)));
+    // update activeFile and openTabs
+    setActiveFile((prev) => (prev ? { ...prev, content: val } : prev));
+    setOpenTabs((prev) => prev.map((t) => (t.id === activeFile.id ? { ...t, content: val } : t)));
 
-    if (socketRef.current && socketRef.current.connected) {
+    // send changes
+    if (socketRef.current?.connected) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
-        socketRef.current.emit("code-change", { roomId, code: value });
+        socketRef.current.emit("code-change", { roomId, code: val });
       }, 200);
     }
   };
 
+  // ─────────────────────────────────────────────
+  // Helpers for UI
+  // ─────────────────────────────────────────────
+  const getLogColor = (type) => (type === "error" ? "text-red-400" : type === "info" ? "text-blue-400" : "text-gray-300");
+
+  // ─────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────
   return (
     <div className={`h-screen flex flex-col ${theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-50 text-gray-900"}`}>
       <div className="flex flex-1 overflow-hidden">
         <ActivityBar theme={theme} setTheme={setTheme} />
+
         <Sidebar
           files={files}
-          onCreateFile={handleCreateFileClick}
-          onCreateFolder={handleCreateFolderClick}
+          onCreateFile={(p) => { setCreateParent(p || null); setCreateType("file"); setShowCreateModal(true); }}
+          onCreateFolder={(p) => { setCreateParent(p || null); setCreateType("folder"); setShowCreateModal(true); }}
           onSelectFile={openFile}
+          onRename={(node, newName) => {
+            // rename in tree
+            const rename = (nodes) => nodes.map((n) => {
+              if (n.id === node.id) return { ...n, name: newName };
+              if (n.type === "folder") return { ...n, children: rename(n.children || []) };
+              return n;
+            });
+            setFiles((prev) => rename(prev));
+            // update openTabs and activeFile names if needed
+            setOpenTabs((prev) => prev.map((t) => (t.id === node.id ? { ...t, name: newName } : t)));
+            if (activeFile?.id === node.id) setActiveFile((a) => ({ ...a, name: newName }));
+          }}
           onDelete={handleDelete}
           activeFile={activeFile}
           theme={theme}
         />
 
-        <div key={fadeKey} className="flex-1 flex flex-col transition-opacity duration-500">
+        <div key={fadeKey} className="flex-1 flex flex-col">
+          {/* Tabs */}
           <div className={`flex items-center border-b ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"}`}>
             {openTabs.map((tab) => (
-              <div
-                key={tab.id}
-                onClick={() => openFile(tab)}
-                className={`flex items-center gap-2 px-3 py-2 text-sm border-r cursor-pointer ${activeFile?.id === tab.id ? "bg-indigo-500 text-white" : theme === "dark-mode" ? "text-gray-400 hover:bg-gray-800" : "text-gray-700 hover:bg-gray-200"}`}
-              >
+              <div key={tab.id} onClick={() => openFile(tab)} className={`flex items-center gap-2 px-3 py-2 border-r cursor-pointer ${activeFile?.id === tab.id ? "bg-indigo-500 text-white" : theme === "dark-mode" ? "text-gray-400 hover:bg-gray-800" : "text-gray-700 hover:bg-gray-200"}`}>
                 <span>{tab.name}</span>
-                <FiX
-                  size={14}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeTab(tab);
-                  }}
-                />
+                <FiX size={14} onClick={(e) => { e.stopPropagation(); closeTab(tab); }} />
               </div>
             ))}
           </div>
 
+          {/* Editor */}
           <div className="flex-1 overflow-hidden">
             {activeFile ? (
               <Editor
                 height="100%"
                 theme={theme}
                 language={language}
-                value={activeFile.content}
-                onMount={(editor, monaco) => {
-                  editorRef.current = editor;
-                  monaco.editor.setTheme(theme);
-                  setTimeout(() => editor.layout(), 100);
-                }}
+                value={activeFile.content || ""}
+                onMount={(editor, monaco) => { editorRef.current = editor; monaco.editor.setTheme(theme); setTimeout(() => editor.layout(), 100); }}
                 onChange={handleEditorChange}
-                options={{
-                  minimap: { enabled: true },
-                  fontSize: 14,
-                  automaticLayout: true,
-                  smoothScrolling: true,
-                  scrollBeyondLastLine: false,
-                  readOnly: locked,
-                }}
+                options={{ minimap: { enabled: true }, fontSize: 14, automaticLayout: true, smoothScrolling: true, scrollBeyondLastLine: false, readOnly: locked }}
               />
             ) : (
-              <div className="flex items-center justify-center h-full text-gray-500 select-none">
-                {locked ? "You are not authorized to view this workspace." : "Select or create a file to start coding."}
+              <div className="h-full flex items-center justify-center text-gray-500">
+                {locked ? "You are not authorized to view this workspace." : "Open or create a file to start coding."}
               </div>
             )}
           </div>
 
+          {/* Bottom Bar */}
           <div className={`flex items-center justify-between px-4 py-2 border-t ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"}`}>
-            <button
-              onClick={handleRun}
-              className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-1.5 rounded-md text-sm"
-              disabled={locked}
-            >
+            <button onClick={handleRun} className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-1.5 rounded">
               <FiPlay /> Run
             </button>
 
-            <button onClick={handleCopyLink} className="flex items-center gap-2 text-gray-400 hover:text-indigo-400">
+            <button onClick={() => { navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(() => setCopied(false), 1500); }} className="flex items-center gap-2 text-gray-400 hover:text-indigo-400">
               {copied ? <FiCheck /> : <FiCopy />} Share
             </button>
           </div>
 
+          {/* Terminal */}
           {showTerminal && (
             <>
-              <div onMouseDown={handleMouseDown} className="h-2 cursor-row-resize bg-gray-700"></div>
+              <div onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); document.body.style.cursor = "row-resize"; }} className="h-2 bg-gray-700 cursor-row-resize" />
+
               <div style={{ height: terminalHeight }} className={`border-t ${theme === "dark-mode" ? "border-gray-800 bg-gray-900" : "border-gray-300 bg-gray-50"}`}>
                 <div className="flex justify-between items-center px-3 py-1 border-b border-gray-700 bg-gray-800/70 text-sm">
                   <span className="text-gray-400 select-none">TERMINAL</span>
-                  <button onClick={() => setShowTerminal(false)} className="text-gray-400 hover:text-red-400 transition" title="Close Terminal">
-                    <FiX size={16} />
-                  </button>
+                  <button onClick={() => setShowTerminal(false)} className="text-gray-400 hover:text-red-400"><FiX size={16} /></button>
                 </div>
-                <div ref={terminalRef} className="p-3 text-sm font-mono overflow-y-auto h-full space-y-1 pr-4" style={{ scrollbarGutter: "stable" }}>
-                  {output.length === 0 ? (
-                    <p className="text-gray-400">Terminal ready...</p>
-                  ) : (
-                    output.map((line, i) => (
-                      <p key={i} className={`${getLogColor(line.type)} whitespace-pre-wrap`}>
-                        {">"} {line.text}
-                      </p>
-                    ))
-                  )}
+
+                <div ref={terminalRef} className="p-3 text-sm font-mono overflow-y-auto h-full">
+                  {output.length === 0 ? <p className="text-gray-400">Terminal ready...</p> : output.map((line, i) => (
+                    <p key={i} className={`${getLogColor(line.type)} whitespace-pre-wrap`}>{">"} {line.text}</p>
+                  ))}
                 </div>
               </div>
             </>

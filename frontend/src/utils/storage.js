@@ -1,16 +1,14 @@
-export const saveWorkspace = (roomId, files, openTabs, activeFile) => {
-  localStorage.setItem(`files_${roomId}`, JSON.stringify(files));
-  localStorage.setItem(`tabs_${roomId}`, JSON.stringify(openTabs));
-  localStorage.setItem(`active_${roomId}`, activeFile?.name || "");
+// Save full workspace state
+export const saveWorkspace = (roomId, data) => {
+  localStorage.setItem(`workspace_${roomId}`, JSON.stringify(data));
 };
 
+// Load workspace state
 export const loadWorkspace = (roomId) => {
   try {
-    const files = JSON.parse(localStorage.getItem(`files_${roomId}`)) || [];
-    const openTabs = JSON.parse(localStorage.getItem(`tabs_${roomId}`)) || [];
-    const activeFileName = localStorage.getItem(`active_${roomId}`);
-    return { files, openTabs, activeFileName };
+    const data = JSON.parse(localStorage.getItem(`workspace_${roomId}`));
+    return data || { files: [], openTabs: [], activeFileId: null };
   } catch {
-    return { files: [], openTabs: [], activeFileName: null };
+    return { files: [], openTabs: [], activeFileId: null };
   }
 };
