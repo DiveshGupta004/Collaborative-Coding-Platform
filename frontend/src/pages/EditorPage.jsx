@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import { editor as monacoEditor } from "monaco-editor";
 import io from "socket.io-client";
-import { FiCopy, FiCheck, FiX, FiPlay } from "react-icons/fi";
+import { FiCopy, FiCheck, FiX, FiPlay, FiMaximize, FiMinimize } from "react-icons/fi";
 
 import Sidebar from "../components/Sidebar";
 import ActivityBar from "../components/ActivityBar";
@@ -18,59 +18,54 @@ const SERVER_URL = "http://localhost:4000";
 const makeId = () =>
   `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
-/* Flatten files for runner: returns [{ name: 'src/index.js', content: '...' }, ...] */
-function filesFlatList(tree) {
-  const out = [];
-  function walk(nodes, prefix = "") {
-    for (const n of nodes) {
-      if (!n) continue;
-      if (n.type === "file") out.push({ name: prefix + n.name, content: n.content || "" });
-      else if (n.type === "folder") walk(n.children || [], prefix + n.name + "/");
-    }
-  }
-  walk(tree, "");
-  return out;
+/* ---------- Soft Fullscreen ---------- */
+function requestFullscreenSoft() {
+  const el = document.documentElement;
+  if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen().catch(() => {});
 }
 
-/* find file in tree by id */
-function findFileById(tree, id) {
-  for (const n of tree) {
-    if (!n) continue;
-    if (n.id === id) return n;
-    if (n.type === "folder") {
-      const r = findFileById(n.children || [], id);
+/* ---------- Utils ---------- */
+const filesFlatList = (tree) => {
+  const list = [];
+  (function walk(nodes, prefix = "") {
+    for (const n of nodes) {
+      if (n.type === "file") list.push({ name: prefix + n.name, content: n.content || "" });
+      else walk(n.children || [], prefix + n.name + "/");
+    }
+  })(tree);
+  return list;
+};
+
+const findFileById = (tree, id) => {
+  for (const node of tree) {
+    if (node.id === id) return node;
+    if (node.type === "folder") {
+      const found = findFileById(node.children || [], id);
+      if (found) return found;
+    }
+  }
+  return null;
+};
+
+const getFullPathById = (id, tree, prefix = "") => {
+  for (const node of tree) {
+    if (node.id === id) return prefix + node.name;
+    if (node.type === "folder") {
+      const r = getFullPathById(id, node.children || [], prefix + node.name + "/");
       if (r) return r;
     }
   }
   return null;
-}
+};
 
-/* compute full relative path for a file id (e.g. "src/utils/index.js") */
-function getFullPathById(targetId, tree, prefix = "") {
-  for (const node of tree) {
-    if (!node) continue;
-    if (node.id === targetId) return prefix + node.name;
-    if (node.type === "folder") {
-      const res = getFullPathById(targetId, node.children || [], prefix + node.name + "/");
-      if (res) return res;
-    }
-  }
-  return null;
-}
-
-/* update file content in the tree (immutable) */
-function updateFileContent(tree, targetId, newContent) {
-  return tree.map((node) => {
-    if (!node) return node;
-    if (node.id === targetId && node.type === "file") {
-      return { ...node, content: newContent };
-    }
-    if (node.type === "folder") {
-      return { ...node, children: updateFileContent(node.children || [], targetId, newContent) };
-    }
-    return node;
-  });
-}
+const updateFileContent = (tree, id, value) =>
+  tree.map((n) =>
+    n.id === id
+      ? { ...n, content: value }
+      : n.type === "folder"
+      ? { ...n, children: updateFileContent(n.children, id, value) }
+      : n
+  );
 
 export default function EditorPage() {
   const { roomId } = useParams();
@@ -80,172 +75,160 @@ export default function EditorPage() {
   const [files, setFiles] = useState([]);
   const [openTabs, setOpenTabs] = useState([]);
   const [activeFile, setActiveFile] = useState(null);
+
   const [language, setLanguage] = useState("");
   const [output, setOutput] = useState([]);
   const [showTerminal, setShowTerminal] = useState(false);
   const [copied, setCopied] = useState(false);
   const [theme, setTheme] = useState("dark-mode");
   const [terminalHeight, setTerminalHeight] = useState(200);
-  const [isResizing, setIsResizing] = useState(false);
   const [fadeKey, setFadeKey] = useState(0);
 
-  const terminalRef = useRef(null);
-  const editorRef = useRef(null);
-  const socketRef = useRef(null);
-  const debounceRef = useRef(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const activeFileRef = useRef(null); // keep current activeFile for socket callbacks
-  useEffect(() => { activeFileRef.current = activeFile; }, [activeFile]);
+  const socketRef = useRef(null);
+  const editorRef = useRef(null);
+  const terminalRef = useRef(null);
+  const debounceRef = useRef(null);
+  const activeFileRef = useRef(null);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createType, setCreateType] = useState("file");
   const [createParent, setCreateParent] = useState(null);
 
   const [locked, setLocked] = useState(true);
-  const [connecting, setConnecting] = useState(true);
 
-  // ─────────────────────────────────────────────
-  // SOCKET SETUP (create once per room/user)
-  // ─────────────────────────────────────────────
+  useEffect(() => {
+    activeFileRef.current = activeFile;
+  }, [activeFile]);
+
+  /* ---------- Socket ---------- */
   useEffect(() => {
     if (!roomId) return;
 
-    const socket = io(SERVER_URL, {
-      transports: ["websocket"],
-      auth: { token: accessToken },
-    });
+    const socket = io(SERVER_URL, { transports: ["websocket"], auth: { token: accessToken } });
     socketRef.current = socket;
 
-    const onConnect = () => {
-      const payloadUser = user ? { id: user.id || user._id, email: user.email, username: user.username } : null;
-      socket.emit("join-room", { roomId, user: payloadUser });
-    };
+    socket.on("connect", () =>
+      socket.emit("join-room", {
+        roomId,
+        user: user
+          ? { id: user.id || user._id, email: user.email, username: user.username }
+          : null,
+      })
+    );
 
-    const onLoadCode = () => {
+    socket.on("load-code", () => {
       const saved = loadWorkspace(roomId) || { files: [], openTabs: [], activeFileId: null };
 
-      // ensure ids exist
-      const ensureIds = (nodes) =>
-        (nodes || []).map((n) => {
-          if (!n.id) n.id = makeId();
-          if (n.type === "folder") n.children = ensureIds(n.children || []);
-          return n;
-        });
+      const assignIds = (arr) =>
+        arr.map((n) => ({
+          ...n,
+          id: n.id || makeId(),
+          ...(n.type === "folder" && { children: assignIds(n.children || []) }),
+        }));
 
-      const loadedFiles = ensureIds(saved.files || []);
-      const loadedTabs = ensureIds(saved.openTabs || []);
+      const lf = assignIds(saved.files);
+      const lt = assignIds(saved.openTabs);
 
-      setFiles(loadedFiles);
-      setOpenTabs(loadedTabs);
+      setFiles(lf);
+      setOpenTabs(lt);
 
-      // restore active file by id -> find the actual object inside loadedTabs or files
       if (saved.activeFileId) {
-        const foundInTabs = findFileById(loadedTabs, saved.activeFileId);
-        const foundInFiles = findFileById(loadedFiles, saved.activeFileId);
-        const fileObj = foundInTabs || foundInFiles;
-        if (fileObj) {
-          setActiveFile(fileObj);
-          setLanguage(getLanguage(fileObj.name));
+        const match = findFileById(lf, saved.activeFileId);
+        if (match) {
+          setActiveFile(match);
+          setLanguage(getLanguage(match.name));
         }
       }
-    };
+    });
 
-    const onJoined = () => { setLocked(false); setConnecting(false); };
-    const onAccessDenied = (msg) => { toast.error(msg || "Access denied"); setLocked(true); setTimeout(() => navigate("/"), 1000); };
+    socket.on("joined-authorized", () => setLocked(false));
 
-    const onReceiveChanges = (code) => {
-      // update activeFile content safely using ref to avoid stale closure
-      const current = activeFileRef.current;
-      if (!current) return;
-      // update activeFile and files tree & openTabs
-      setActiveFile((prev) => (prev ? { ...prev, content: code } : prev));
-      setOpenTabs((prev) => prev.map((t) => (t.id === current.id ? { ...t, content: code } : t)));
-      setFiles((prev) => updateFileContent(prev, current.id, code));
-    };
+    socket.on("receive-changes", (code) => {
+      const file = activeFileRef.current;
+      if (!file) return;
 
-    const onRunStarted = ({ runId }) => {
-      setOutput((prev) => {
-        // avoid duplicate run-start messages if any
-        if (prev.length && String(prev[prev.length - 1].text || "").includes(String(runId))) return prev;
-        return [...prev, { text: `🔵 Run started: ${runId}\n`, type: "info" }];
-      });
+      setActiveFile({ ...file, content: code });
+      setFiles((prev) => updateFileContent(prev, file.id, code));
+      setOpenTabs((prev) => prev.map((t) => (t.id === file.id ? { ...t, content: code } : t)));
+    });
+
+    socket.on("run-started", ({ runId }) => {
+      setOutput((prev) => [...prev, { text: `🔵 Run started: ${runId}`, type: "info" }]);
       setShowTerminal(true);
-    };
+    });
 
-    const onRunOutput = ({ text, isErr }) => {
-      setOutput((prev) => [...prev, { text: String(text), type: isErr ? "error" : "stream" }]);
-      // scroll
-      setTimeout(() => terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight, behavior: "smooth" }), 30);
-    };
+    socket.on("run-output", ({ text, isErr }) => {
+      setOutput((prev) => [...prev, { text, type: isErr ? "error" : "stream" }]);
+      setTimeout(
+        () =>
+          terminalRef.current?.scrollTo({
+            top: terminalRef.current.scrollHeight,
+            behavior: "smooth",
+          }),
+        30
+      );
+    });
 
-    const onRunFinished = ({ code, timedOut }) => {
-      setOutput((prev) => [...prev, { text: `\n🟢 Run finished. Exit code: ${code}${timedOut ? " (Timed out)" : ""}\n`, type: "info" }]);
-    };
+    socket.on("run-finished", ({ code }) => {
+      setOutput((prev) => [...prev, { text: `🟢 Run finished. Exit: ${code}`, type: "info" }]);
+    });
 
-    // register
-    socket.on("connect", onConnect);
-    socket.on("load-code", onLoadCode);
-    socket.on("joined-authorized", onJoined);
-    socket.on("access-denied", onAccessDenied);
-    socket.on("receive-changes", onReceiveChanges);
-    socket.on("run-started", onRunStarted);
-    socket.on("run-output", onRunOutput);
-    socket.on("run-finished", onRunFinished);
+    socket.on("access-denied", () => {
+      toast.error("Access Denied");
+      navigate("/");
+    });
 
-    // cleanup
-    return () => {
-      try {
-        socket.off("connect", onConnect);
-        socket.off("load-code", onLoadCode);
-        socket.off("joined-authorized", onJoined);
-        socket.off("access-denied", onAccessDenied);
-        socket.off("receive-changes", onReceiveChanges);
-        socket.off("run-started", onRunStarted);
-        socket.off("run-output", onRunOutput);
-        socket.off("run-finished", onRunFinished);
-        socket.disconnect();
-      } catch (e) {
-        // ignore
-      }
-    };
-    // intentionally DO NOT include activeFile in deps to avoid reconnect on typing
-  }, [roomId, accessToken, user, navigate]);
+    return () => socket.disconnect();
+  }, [roomId, accessToken, navigate, user]);
 
-  // ─────────────────────────────────────────────
-  // THEME
-  // ─────────────────────────────────────────────
+  /* ---------- Theme ---------- */
   useEffect(() => {
-    if (!monacoEditor) return;
-    monacoEditor.defineTheme("dark-mode", { base: "vs-dark", inherit: true, rules: [], colors: { "editor.background": "#111827" } });
-    monacoEditor.defineTheme("light-mode", { base: "vs", inherit: true, rules: [], colors: { "editor.background": "#f9fafb" } });
+    monacoEditor.defineTheme("dark-mode", {
+      base: "vs-dark",
+      inherit: true,
+      rules: [],
+      colors: { "editor.background": "#111827" },
+    });
+
+    monacoEditor.setTheme(localStorage.getItem("editor-theme") || "dark-mode");
     setTheme(localStorage.getItem("editor-theme") || "dark-mode");
   }, []);
 
   useEffect(() => {
-    try { monacoEditor.setTheme(theme); localStorage.setItem("editor-theme", theme); setFadeKey((p) => p + 1); } catch (e) {}
+    monacoEditor.setTheme(theme);
+    localStorage.setItem("editor-theme", theme);
+    setFadeKey((x) => x + 1);
   }, [theme]);
 
-  // ─────────────────────────────────────────────
-  // AUTO-SAVE workspace
-  // ─────────────────────────────────────────────
+  /* ---------- Auto Save ---------- */
   useEffect(() => {
-    if (!roomId) return;
-    saveWorkspace(roomId, { files, openTabs, activeFileId: activeFile?.id || null });
+    saveWorkspace(roomId, {
+      files,
+      openTabs,
+      activeFileId: activeFile?.id || null,
+    });
   }, [files, openTabs, activeFile, roomId]);
 
-  // ─────────────────────────────────────────────
-  // FILE OPERATIONS
-  // ─────────────────────────────────────────────
+  /* ---------- File Actions ---------- */
   const handleCreateFile = (parent, name) => {
+    requestFullscreenSoft();
     const file = { id: makeId(), name, type: "file", content: "" };
+
     if (parent?.type === "folder") {
-      const add = (nodes) => nodes.map((n) => {
-        if (n.id === parent.id) return { ...n, children: [...(n.children || []), file] };
-        if (n.type === "folder") return { ...n, children: add(n.children || []) };
-        return n;
-      });
-      setFiles((prev) => add(prev));
-    } else setFiles((prev) => [...prev, file]);
+      setFiles((prev) =>
+        prev.map((n) =>
+          n.id === parent.id
+            ? { ...n, children: [...n.children, file] }
+            : n.type === "folder"
+            ? { ...n, children: [...n.children] }
+            : n
+        )
+      );
+    } else {
+      setFiles((prev) => [...prev, file]);
+    }
 
     setOpenTabs((prev) => [...prev, file]);
     setActiveFile(file);
@@ -253,132 +236,177 @@ export default function EditorPage() {
   };
 
   const handleCreateFolder = (parent, name) => {
+    requestFullscreenSoft();
     const folder = { id: makeId(), name, type: "folder", children: [] };
+
     if (parent?.type === "folder") {
-      const add = (nodes) => nodes.map((n) => {
-        if (n.id === parent.id) return { ...n, children: [...(n.children || []), folder] };
-        if (n.type === "folder") return { ...n, children: add(n.children || []) };
-        return n;
-      });
-      setFiles((prev) => add(prev));
-    } else setFiles((prev) => [...prev, folder]);
+      setFiles((prev) =>
+        prev.map((n) =>
+          n.id === parent.id ? { ...n, children: [...n.children, folder] } : n
+        )
+      );
+    } else {
+      setFiles((prev) => [...prev, folder]);
+    }
   };
 
-  const handleDelete = (target) => {
-    const remove = (nodes) =>
-      nodes
-        .filter((n) => n.id !== target.id)
-        .map((n) => (n.type === "folder" ? { ...n, children: remove(n.children || []) } : n));
-    setFiles((prev) => remove(prev));
-    setOpenTabs((prev) => prev.filter((t) => t.id !== target.id));
-    if (activeFile?.id === target.id) setActiveFile(null);
+  const handleDelete = (node) => {
+    setFiles((list) =>
+      list
+        .filter((i) => i.id !== node.id)
+        .map((n) => (n.type === "folder" ? { ...n, children: n.children } : n))
+    );
+
+    setOpenTabs((prev) => prev.filter((t) => t.id !== node.id));
+    if (activeFile?.id === node.id) setActiveFile(null);
   };
 
   const openFile = (file) => {
-    // ensure the object used for activeFile is the one in files tree (keeps updates consistent)
-    const fromTree = findFileById(files, file.id) || file;
-    setActiveFile(fromTree);
-    setLanguage(getLanguage(file.name));
+    requestFullscreenSoft();
+    const match = findFileById(files, file.id);
+    setActiveFile(match);
+    setLanguage(getLanguage(match.name));
 
-    setOpenTabs((prev) => (prev.some((t) => t.id === file.id) ? prev : [...prev, fromTree]));
+    if (!openTabs.find((t) => t.id === match.id)) setOpenTabs([...openTabs, match]);
   };
 
-  const closeTab = (f) => {
-    setOpenTabs((prev) => prev.filter((t) => t.id !== f.id));
-    if (activeFile?.id === f.id) setActiveFile(null);
+  const closeTab = (tab) => {
+    setOpenTabs(openTabs.filter((t) => t.id !== tab.id));
+    if (activeFile?.id === tab.id) setActiveFile(null);
   };
 
-  // ─────────────────────────────────────────────
-  // RUN CODE: use full path resolution
-  // ─────────────────────────────────────────────
   const handleRun = () => {
     if (!activeFile) return;
-    if (!socketRef.current?.connected) {
-      setOutput((p) => [...p, { text: "Not connected\n", type: "error" }]);
-      setShowTerminal(true);
-      return;
-    }
+    requestFullscreenSoft();
 
-    const allFiles = filesFlatList(files);
-    const entry = getFullPathById(activeFile.id, files);
-    const lang = getLanguage(activeFile.name);
-
-    if (!entry) {
-      setOutput((p) => [...p, { text: "Entry file path not found\n", type: "error" }]);
-      setShowTerminal(true);
-      return;
-    }
+    socketRef.current.emit("run-project", {
+      roomId,
+      files: filesFlatList(files),
+      entry: getFullPathById(activeFile.id, files),
+      language: getLanguage(activeFile.name),
+      timeout: 15000,
+    });
 
     setOutput([]);
     setShowTerminal(true);
-
-    socketRef.current.emit("run-project", { roomId, files: allFiles, entry, language: lang, timeout: 15000 });
   };
 
-  // ─────────────────────────────────────────────
-  // EDITOR CHANGE: update activeFile, openTabs and files tree
-  // ─────────────────────────────────────────────
-  const handleEditorChange = (val) => {
-    if (locked || !activeFile) return;
+  const handleEditorChange = (value) => {
+    requestFullscreenSoft();
+    setFiles(updateFileContent(files, activeFile.id, value));
+    setActiveFile({ ...activeFile, content: value });
 
-    // update files tree content
-    setFiles((prev) => updateFileContent(prev, activeFile.id, val));
+    if (debounceRef.current) clearTimeout(debounceRef.current);
 
-    // update activeFile and openTabs
-    setActiveFile((prev) => (prev ? { ...prev, content: val } : prev));
-    setOpenTabs((prev) => prev.map((t) => (t.id === activeFile.id ? { ...t, content: val } : t)));
+    debounceRef.current = setTimeout(
+      () => socketRef.current.emit("code-change", { roomId, code: value }),
+      200
+    );
+  };
 
-    // send changes
-    if (socketRef.current?.connected) {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
-        socketRef.current.emit("code-change", { roomId, code: val });
-      }, 200);
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      requestFullscreenSoft();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen?.();
+      setIsFullscreen(false);
     }
   };
 
-  // ─────────────────────────────────────────────
-  // Helpers for UI
-  // ─────────────────────────────────────────────
-  const getLogColor = (type) => (type === "error" ? "text-red-400" : type === "info" ? "text-blue-400" : "text-gray-300");
+  const getLogColor = (type) =>
+    type === "error"
+      ? "text-red-400"
+      : type === "info"
+      ? "text-blue-400"
+      : "text-gray-300";
 
-  // ─────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────
   return (
     <div className={`h-screen flex flex-col ${theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-50 text-gray-900"}`}>
+      
+      {/* 🔹 TOP RIGHT BUTTONS */}
+      <div className="absolute top-3 right-4 z-50 flex gap-3 items-center">
+        
+        {/* Run */}
+        <button onClick={handleRun} className="p-2 bg-indigo-600 hover:bg-indigo-700 rounded-md" title="Run">
+          <FiPlay size={18} />
+        </button>
+
+        {/* Share */}
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(window.location.href);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+          className="p-2 bg-gray-700 hover:bg-gray-600 rounded-md"
+          title="Share"
+        >
+          {copied ? <FiCheck size={18} /> : <FiCopy size={18} />}
+        </button>
+
+        {/* Fullscreen */}
+        <button onClick={toggleFullscreen} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-md" title="Fullscreen">
+          {isFullscreen ? <FiMinimize size={18} /> : <FiMaximize size={18} />}
+        </button>
+      </div>
+
       <div className="flex flex-1 overflow-hidden">
         <ActivityBar theme={theme} setTheme={setTheme} />
 
         <Sidebar
           files={files}
-          onCreateFile={(p) => { setCreateParent(p || null); setCreateType("file"); setShowCreateModal(true); }}
-          onCreateFolder={(p) => { setCreateParent(p || null); setCreateType("folder"); setShowCreateModal(true); }}
           onSelectFile={openFile}
+          onCreateFile={(p) => {
+            setCreateParent(p || null);
+            setCreateType("file");
+            setShowCreateModal(true);
+          }}
+          onCreateFolder={(p) => {
+            setCreateParent(p || null);
+            setCreateType("folder");
+            setShowCreateModal(true);
+          }}
           onRename={(node, newName) => {
-            // rename in tree
-            const rename = (nodes) => nodes.map((n) => {
-              if (n.id === node.id) return { ...n, name: newName };
-              if (n.type === "folder") return { ...n, children: rename(n.children || []) };
-              return n;
-            });
+            const rename = (arr) =>
+              arr.map((n) =>
+                n.id === node.id
+                  ? { ...n, name: newName }
+                  : n.type === "folder"
+                  ? { ...n, children: rename(n.children) }
+                  : n
+              );
+
             setFiles((prev) => rename(prev));
-            // update openTabs and activeFile names if needed
             setOpenTabs((prev) => prev.map((t) => (t.id === node.id ? { ...t, name: newName } : t)));
-            if (activeFile?.id === node.id) setActiveFile((a) => ({ ...a, name: newName }));
+
+            if (activeFile?.id === node.id)
+              setActiveFile((a) => ({ ...a, name: newName }));
           }}
           onDelete={handleDelete}
           activeFile={activeFile}
           theme={theme}
         />
 
+        {/* Workspace */}
         <div key={fadeKey} className="flex-1 flex flex-col">
-          {/* Tabs */}
-          <div className={`flex items-center border-b ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"}`}>
+
+          {/* Tabs - smaller UI */}
+          <div className={`flex items-center border-b text-xs ${
+            theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
+          }`}>
             {openTabs.map((tab) => (
-              <div key={tab.id} onClick={() => openFile(tab)} className={`flex items-center gap-2 px-3 py-2 border-r cursor-pointer ${activeFile?.id === tab.id ? "bg-indigo-500 text-white" : theme === "dark-mode" ? "text-gray-400 hover:bg-gray-800" : "text-gray-700 hover:bg-gray-200"}`}>
-                <span>{tab.name}</span>
-                <FiX size={14} onClick={(e) => { e.stopPropagation(); closeTab(tab); }} />
+              <div
+                key={tab.id}
+                onClick={() => openFile(tab)}
+                className={`flex items-center gap-2 px-3 py-2 cursor-pointer ${
+                  activeFile?.id === tab.id
+                    ? "bg-indigo-500 text-white"
+                    : "text-gray-400 hover:bg-gray-800"
+                }`}
+              >
+                {tab.name}
+                <FiX onClick={(e) => { e.stopPropagation(); closeTab(tab); }} className="cursor-pointer" />
               </div>
             ))}
           </div>
@@ -390,50 +418,45 @@ export default function EditorPage() {
                 height="100%"
                 theme={theme}
                 language={language}
-                value={activeFile.content || ""}
-                onMount={(editor, monaco) => { editorRef.current = editor; monaco.editor.setTheme(theme); setTimeout(() => editor.layout(), 100); }}
+                value={activeFile.content}
                 onChange={handleEditorChange}
-                options={{ minimap: { enabled: true }, fontSize: 14, automaticLayout: true, smoothScrolling: true, scrollBeyondLastLine: false, readOnly: locked }}
+                onMount={(editor) => {
+                  editorRef.current = editor;
+                  monacoEditor.setTheme(theme);
+                }}
+                options={{
+                  minimap: { enabled: true },
+                  fontSize: 14,
+                  automaticLayout: true,
+                  scrollBeyondLastLine: false,
+                }}
               />
             ) : (
               <div className="h-full flex items-center justify-center text-gray-500">
-                {locked ? "You are not authorized to view this workspace." : "Open or create a file to start coding."}
+                Open or create a file to start coding.
               </div>
             )}
           </div>
 
-          {/* Bottom Bar */}
-          <div className={`flex items-center justify-between px-4 py-2 border-t ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"}`}>
-            <button onClick={handleRun} className="flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white px-4 py-1.5 rounded">
-              <FiPlay /> Run
-            </button>
-
-            <button onClick={() => { navigator.clipboard.writeText(window.location.href); setCopied(true); setTimeout(() => setCopied(false), 1500); }} className="flex items-center gap-2 text-gray-400 hover:text-indigo-400">
-              {copied ? <FiCheck /> : <FiCopy />} Share
-            </button>
-          </div>
-
           {/* Terminal */}
           {showTerminal && (
-            <>
-              <div onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); document.body.style.cursor = "row-resize"; }} className="h-2 bg-gray-700 cursor-row-resize" />
-
-              <div style={{ height: terminalHeight }} className={`border-t ${theme === "dark-mode" ? "border-gray-800 bg-gray-900" : "border-gray-300 bg-gray-50"}`}>
-                <div className="flex justify-between items-center px-3 py-1 border-b border-gray-700 bg-gray-800/70 text-sm">
-                  <span className="text-gray-400 select-none">TERMINAL</span>
-                  <button onClick={() => setShowTerminal(false)} className="text-gray-400 hover:text-red-400"><FiX size={16} /></button>
-                </div>
-
-                <div ref={terminalRef} className="p-3 text-sm font-mono overflow-y-auto h-full">
-                  {output.length === 0 ? <p className="text-gray-400">Terminal ready...</p> : output.map((line, i) => (
-                    <p key={i} className={`${getLogColor(line.type)} whitespace-pre-wrap`}>{">"} {line.text}</p>
-                  ))}
-                </div>
+            <div className="border-t border-gray-700" style={{ height: terminalHeight }}>
+              <div className="flex justify-between p-2 bg-gray-800 text-sm">
+                <span className="text-gray-300">Terminal</span>
+                <FiX className="cursor-pointer hover:text-red-400" onClick={() => setShowTerminal(false)} />
               </div>
-            </>
+
+              <div ref={terminalRef} className="p-3 text-sm overflow-y-auto font-mono">
+                {output.map((line, i) => (
+                  <p key={i} className={`${getLogColor(line.type)} whitespace-pre-wrap`}>
+                    {">"} {line.text}
+                  </p>
+                ))}
+              </div>
+            </div>
           )}
 
-          <StatusBar theme={theme} setTheme={setTheme} />
+          <StatusBar theme={theme} />
         </div>
       </div>
 
