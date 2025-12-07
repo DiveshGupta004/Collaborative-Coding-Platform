@@ -1,10 +1,10 @@
-// backend/sockets/editorSocket.js
 import Workspace from "../models/Workspace.js";
 import jwt from "jsonwebtoken";
 import { runProjectStream } from "../runners/execRunner.js";
 import { v4 as uuidv4 } from "uuid";
 
 export default function editorSocket(socket, io) {
+
   // auth attach
   if (socket.handshake?.auth?.token) {
     try {
@@ -13,7 +13,7 @@ export default function editorSocket(socket, io) {
         process.env.JWT_SECRET || "secret"
       );
       socket.user = decoded;
-    } catch (e) {}
+    } catch (e) { }
   }
 
   // join-room
@@ -23,72 +23,53 @@ export default function editorSocket(socket, io) {
       socket.roomId = roomId;
       socket.user = user || socket.user || null;
 
-      let workspaceDoc = null;
-      try {
-        workspaceDoc = await Workspace.findOne({ roomId }).lean();
-      } catch {}
+      const workspaceDoc = await Workspace.findOne({ roomId }).lean().catch(() => { });
 
-      const code =
-        workspaceDoc?.files?.length && workspaceDoc.files[0]?.content
-          ? workspaceDoc.files[0].content
-          : "";
-
-      socket.emit("load-code", code);
-      io.to(socket.id).emit("joined-authorized");
-    } catch (err) {
-      socket.emit("access-denied", "Unable to join room");
+      socket.emit("load-code", workspaceDoc?.files || []);
+      socket.emit("joined-authorized");
+    } catch {
+      socket.emit("access-denied");
     }
   });
 
+  // real-time code sync
   socket.on("code-change", ({ roomId, code }) => {
     if (!roomId) return;
     socket.to(roomId).emit("receive-changes", code);
   });
 
-  // RUN PROJECT
-  socket.on(
-    "run-project",
-    async ({ roomId, files, entry, language, timeout }) => {
-      try {
-        if (!roomId || !files || !entry || !language) {
-          socket.emit("run-output", {
-            runId: null,
-            text: "Invalid run request\n",
-          });
-          return;
-        }
+  // run code handler
+  socket.on("run-project", ({ roomId, files, entry, language, timeout }) => {
+    const runId = uuidv4();
 
-        if (!socket.rooms.has(roomId)) {
-          socket.emit("run-output", {
-            runId: null,
-            text: "You are not in this room.\n",
-          });
-          return;
-        }
+    // notify UI run started
+    io.in(roomId).emit("run-started", {
+      runId,
+      startedBy: socket.user?.username || socket.id,
+    });
 
-        const runId = uuidv4();
+    runProjectStream({
+      files,
+      entry,
+      language,
+      timeout,
+      runId,
 
-        runProjectStream({
-          files,
-          entry,
-          language,
-          socket,
-          runId,
-          timeout: timeout || 15000,
-        });
+      onStdout: (msg) => {
+        io.in(roomId).emit("run-output", { text: msg, isErr: false });
+      },
 
-        io.to(roomId).emit("run-started", {
-          runId,
-          startedBy: socket.user?.username || socket.id,
-        });
-      } catch (err) {
-        socket.emit("run-output", {
-          runId: null,
-          text: `Run error: ${String(err)}\n`,
-        });
-      }
-    }
-  );
+      onStderr: (msg) => {
+        io.in(roomId).emit("run-output", { text: msg, isErr: true });
+      },
 
-  socket.on("disconnect", () => {});
+      onClose: (code) => {
+        io.in(roomId).emit("run-finished", { code });
+      },
+    });
+  });
+
+
+
+  socket.on("disconnect", () => { });
 }

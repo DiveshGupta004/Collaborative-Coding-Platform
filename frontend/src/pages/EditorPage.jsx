@@ -3,37 +3,55 @@ import { useParams, useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import { editor as monacoEditor } from "monaco-editor";
 import io from "socket.io-client";
-import { FiCopy, FiCheck, FiX, FiPlay, FiMaximize, FiMinimize } from "react-icons/fi";
+import {
+  FiCopy,
+  FiCheck,
+  FiX,
+  FiPlay,
+  FiMaximize,
+  FiMinimize,
+} from "react-icons/fi";
 
 import Sidebar from "../components/Sidebar";
 import ActivityBar from "../components/ActivityBar";
 import StatusBar from "../components/StatusBar";
 import CreateItemModal from "../components/CreateItemModal";
+import CollaboratorsPanel from "../components/CollaboratorsPanel";
+
 import { getLanguage } from "../utils/fileUtils";
 import { saveWorkspace, loadWorkspace } from "../utils/storage";
 import { AuthContext } from "../context/AuthContext";
 import toast from "react-hot-toast";
+import axios from "axios";
 
-const SERVER_URL = "http://localhost:4000";
+/* -------- SERVER DETECTION -------- */
+const SERVER_URL =
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1"
+    ? "http://localhost:4000"
+    : window.location.origin;
+
 const makeId = () =>
   `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
-/* ---------- Soft Fullscreen ---------- */
+/* --------- UTILS --------- */
 function requestFullscreenSoft() {
   const el = document.documentElement;
-  if (!document.fullscreenElement && el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  if (!document.fullscreenElement && el.requestFullscreen) {
+    el.requestFullscreen().catch(() => {});
+  }
 }
 
-/* ---------- Utils ---------- */
 const filesFlatList = (tree) => {
-  const list = [];
+  const result = [];
   (function walk(nodes, prefix = "") {
     for (const n of nodes) {
-      if (n.type === "file") list.push({ name: prefix + n.name, content: n.content || "" });
+      if (n.type === "file")
+        result.push({ name: prefix + n.name, content: n.content || "" });
       else walk(n.children || [], prefix + n.name + "/");
     }
   })(tree);
-  return list;
+  return result;
 };
 
 const findFileById = (tree, id) => {
@@ -63,10 +81,11 @@ const updateFileContent = (tree, id, value) =>
     n.id === id
       ? { ...n, content: value }
       : n.type === "folder"
-      ? { ...n, children: updateFileContent(n.children, id, value) }
-      : n
+        ? { ...n, children: updateFileContent(n.children, id, value) }
+        : n
   );
 
+/* ---------------- COMPONENT ---------------- */
 export default function EditorPage() {
   const { roomId } = useParams();
   const navigate = useNavigate();
@@ -76,66 +95,133 @@ export default function EditorPage() {
   const [openTabs, setOpenTabs] = useState([]);
   const [activeFile, setActiveFile] = useState(null);
 
+  const [theme, setTheme] = useState("dark-mode");
   const [language, setLanguage] = useState("");
   const [output, setOutput] = useState([]);
   const [showTerminal, setShowTerminal] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [theme, setTheme] = useState("dark-mode");
-  const [terminalHeight, setTerminalHeight] = useState(200);
   const [fadeKey, setFadeKey] = useState(0);
+  const [copied, setCopied] = useState(false);
 
+  const [activeTab, setActiveTab] = useState("explorer");
+  const [collaborators, setCollaborators] = useState([]);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const socketRef = useRef(null);
   const editorRef = useRef(null);
+  const socketRef = useRef(null);
   const terminalRef = useRef(null);
-  const debounceRef = useRef(null);
   const activeFileRef = useRef(null);
+  const debounceRef = useRef(null);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createType, setCreateType] = useState("file");
   const [createParent, setCreateParent] = useState(null);
 
-  const [locked, setLocked] = useState(true);
+  const [autoSave, setAutoSave] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     activeFileRef.current = activeFile;
   }, [activeFile]);
 
-  /* ---------- Socket ---------- */
+  /* -------- Fetch Workspace Members ------- */
+  const fetchMembers = async () => {
+    try {
+      const res = await axios.get(`/api/workspace/${roomId}/members`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      const { owner, collaborators } = res.data;
+      const formatted = [
+        { ...owner, role: "Owner" },
+        ...collaborators.map((c) => ({ ...c, role: "Collaborator" })),
+      ];
+
+      setCollaborators(formatted);
+    } catch {
+      setCollaborators([]);
+    }
+  };
+
+  /* -------- SAVE TO DB -------- */
+  const saveToDB = async () => {
+    try {
+      await axios.put(
+        `/api/workspace/${roomId}/save`,
+        { files, openTabs, activeFileId: activeFile?.id || null },
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+    } catch (err) {
+      console.log("❌ DB Save Failed", err);
+    }
+  };
+
+  /* -------- SOCKET CONNECTION -------- */
   useEffect(() => {
     if (!roomId) return;
 
-    const socket = io(SERVER_URL, { transports: ["websocket"], auth: { token: accessToken } });
+    const socket = io(SERVER_URL, {
+      transports: ["websocket"],
+      auth: { token: accessToken },
+    });
+
     socketRef.current = socket;
 
-    socket.on("connect", () =>
+    socket.on("connect", () => {
       socket.emit("join-room", {
         roomId,
-        user: user
-          ? { id: user.id || user._id, email: user.email, username: user.username }
-          : null,
-      })
-    );
+        user: { id: user.id, username: user.username, email: user.email },
+      });
+      fetchMembers();
+    });
 
-    socket.on("load-code", () => {
-      const saved = loadWorkspace(roomId) || { files: [], openTabs: [], activeFileId: null };
+    socket.on("run-started", () => {
+      setShowTerminal(true);
+      setOutput((prev) => [...prev, { type: "info", text: "🚀 Running...\n" }]);
+    });
 
-      const assignIds = (arr) =>
+    socket.on("run-output", ({ text, isErr }) => {
+      setOutput((prev) => [...prev, { type: isErr ? "error" : "stream", text }]);
+      setTimeout(() => {
+        terminalRef.current?.scrollTo({ 
+          top: terminalRef.current.scrollHeight, 
+          behavior: "smooth" 
+        });
+      }, 50);
+    });
+
+    socket.on("run-finished", ({ code }) => {
+      setOutput((prev) => [
+        ...prev, 
+        { type: "info", text: `\n🟢 Finished (exit: ${code})\n` }
+      ]);
+    });
+
+    socket.on("load-code", async () => {
+      let saved = loadWorkspace(roomId);
+
+      if (!saved || !saved.files?.length) {
+        const res = await axios.get(`/api/workspace/${roomId}/load`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        saved = res.data;
+        saveWorkspace(roomId, saved);
+      }
+
+      const assign = (arr) =>
         arr.map((n) => ({
           ...n,
           id: n.id || makeId(),
-          ...(n.type === "folder" && { children: assignIds(n.children || []) }),
+          ...(n.type === "folder" && { children: assign(n.children || []) }),
         }));
 
-      const lf = assignIds(saved.files);
-      const lt = assignIds(saved.openTabs);
+      const f = assign(saved.files);
+      const t = assign(saved.openTabs);
 
-      setFiles(lf);
-      setOpenTabs(lt);
+      setFiles(f);
+      setOpenTabs(t);
 
       if (saved.activeFileId) {
-        const match = findFileById(lf, saved.activeFileId);
+        const match = findFileById(f, saved.activeFileId);
         if (match) {
           setActiveFile(match);
           setLanguage(getLanguage(match.name));
@@ -143,36 +229,11 @@ export default function EditorPage() {
       }
     });
 
-    socket.on("joined-authorized", () => setLocked(false));
-
     socket.on("receive-changes", (code) => {
-      const file = activeFileRef.current;
-      if (!file) return;
+      if (!activeFileRef.current) return;
 
-      setActiveFile({ ...file, content: code });
-      setFiles((prev) => updateFileContent(prev, file.id, code));
-      setOpenTabs((prev) => prev.map((t) => (t.id === file.id ? { ...t, content: code } : t)));
-    });
-
-    socket.on("run-started", ({ runId }) => {
-      setOutput((prev) => [...prev, { text: `🔵 Run started: ${runId}`, type: "info" }]);
-      setShowTerminal(true);
-    });
-
-    socket.on("run-output", ({ text, isErr }) => {
-      setOutput((prev) => [...prev, { text, type: isErr ? "error" : "stream" }]);
-      setTimeout(
-        () =>
-          terminalRef.current?.scrollTo({
-            top: terminalRef.current.scrollHeight,
-            behavior: "smooth",
-          }),
-        30
-      );
-    });
-
-    socket.on("run-finished", ({ code }) => {
-      setOutput((prev) => [...prev, { text: `🟢 Run finished. Exit: ${code}`, type: "info" }]);
+      setFiles((prev) => updateFileContent(prev, activeFileRef.current.id, code));
+      setActiveFile({ ...activeFileRef.current, content: code });
     });
 
     socket.on("access-denied", () => {
@@ -183,7 +244,7 @@ export default function EditorPage() {
     return () => socket.disconnect();
   }, [roomId, accessToken, navigate, user]);
 
-  /* ---------- Theme ---------- */
+  /* -------- Setup Theme -------- */
   useEffect(() => {
     monacoEditor.defineTheme("dark-mode", {
       base: "vs-dark",
@@ -199,80 +260,39 @@ export default function EditorPage() {
   useEffect(() => {
     monacoEditor.setTheme(theme);
     localStorage.setItem("editor-theme", theme);
-    setFadeKey((x) => x + 1);
+    setFadeKey((key) => key + 1);
   }, [theme]);
 
-  /* ---------- Auto Save ---------- */
+  /* -------- AUTO SAVE: DB + LOCAL ------- */
   useEffect(() => {
-    saveWorkspace(roomId, {
-      files,
-      openTabs,
-      activeFileId: activeFile?.id || null,
-    });
-  }, [files, openTabs, activeFile, roomId]);
+    saveWorkspace(roomId, { files, openTabs, activeFileId: activeFile?.id || null });
 
-  /* ---------- File Actions ---------- */
+    if (autoSave) {
+      const timer = setTimeout(() => {
+        saveToDB();
+        setIsSaving(false);
+      }, 1200);
+
+      return () => clearTimeout(timer);
+    }
+  }, [files, openTabs, activeFile, autoSave, roomId]);
+
+  /* -------- File Actions -------- */
   const handleCreateFile = (parent, name) => {
     requestFullscreenSoft();
-    const file = { id: makeId(), name, type: "file", content: "" };
+    const file = { id: makeId(), name, content: "", type: "file" };
 
-    if (parent?.type === "folder") {
+    if (parent?.type === "folder")
       setFiles((prev) =>
         prev.map((n) =>
-          n.id === parent.id
-            ? { ...n, children: [...n.children, file] }
-            : n.type === "folder"
-            ? { ...n, children: [...n.children] }
-            : n
+          n.id === parent.id ? { ...n, children: [...n.children, file] } : n
         )
       );
-    } else {
-      setFiles((prev) => [...prev, file]);
-    }
+    else setFiles((prev) => [...prev, file]);
 
-    setOpenTabs((prev) => [...prev, file]);
     setActiveFile(file);
+    setOpenTabs((prev) => [...prev, file]);
     setLanguage(getLanguage(name));
-  };
-
-  const handleCreateFolder = (parent, name) => {
-    requestFullscreenSoft();
-    const folder = { id: makeId(), name, type: "folder", children: [] };
-
-    if (parent?.type === "folder") {
-      setFiles((prev) =>
-        prev.map((n) =>
-          n.id === parent.id ? { ...n, children: [...n.children, folder] } : n
-        )
-      );
-    } else {
-      setFiles((prev) => [...prev, folder]);
-    }
-  };
-
-  const handleDelete = (node) => {
-    setFiles((list) =>
-      list
-        .filter((i) => i.id !== node.id)
-        .map((n) => (n.type === "folder" ? { ...n, children: n.children } : n))
-    );
-
-    setOpenTabs((prev) => prev.filter((t) => t.id !== node.id));
-    if (activeFile?.id === node.id) setActiveFile(null);
-  };
-
-  const openFile = (file) => {
-    requestFullscreenSoft();
-    const match = findFileById(files, file.id);
-    setActiveFile(match);
-    setLanguage(getLanguage(match.name));
-
-    if (!openTabs.find((t) => t.id === match.id)) setOpenTabs([...openTabs, match]);
-  };
-
-  const closeTab = (tab) => {
-    setOpenTabs(openTabs.filter((t) => t.id !== tab.id));
-    if (activeFile?.id === tab.id) setActiveFile(null);
   };
 
   const handleRun = () => {
@@ -293,126 +313,134 @@ export default function EditorPage() {
 
   const handleEditorChange = (value) => {
     requestFullscreenSoft();
+
     setFiles(updateFileContent(files, activeFile.id, value));
     setActiveFile({ ...activeFile, content: value });
 
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      socketRef.current.emit("code-change", { roomId, code: value });
+    }, 200);
 
-    debounceRef.current = setTimeout(
-      () => socketRef.current.emit("code-change", { roomId, code: value }),
-      200
-    );
+    if (autoSave) setIsSaving(true);
   };
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      requestFullscreenSoft();
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen?.();
-      setIsFullscreen(false);
-    }
+    if (!document.fullscreenElement) requestFullscreenSoft();
+    else document.exitFullscreen?.();
+    setIsFullscreen((s) => !s);
   };
 
   const getLogColor = (type) =>
     type === "error"
       ? "text-red-400"
       : type === "info"
-      ? "text-blue-400"
-      : "text-gray-300";
+        ? "text-blue-400"
+        : "text-gray-300";
 
   return (
-    <div className={`h-screen flex flex-col ${theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-50 text-gray-900"}`}>
-      
-      {/* 🔹 TOP RIGHT BUTTONS */}
-      <div className="absolute top-3 right-4 z-50 flex gap-3 items-center">
-        
-        {/* Run */}
-        <button onClick={handleRun} className="p-2 bg-indigo-600 hover:bg-indigo-700 rounded-md" title="Run">
+    <div
+      className={`h-screen flex flex-col ${
+        theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-900"
+      }`}
+    >
+      {/* ==== Top Right Controls ==== */}
+      <div className="absolute right-4 top-3 z-50 flex gap-3">
+        <button 
+          onClick={handleRun} 
+          className="p-2 bg-indigo-600 rounded-md hover:bg-indigo-700"
+        >
           <FiPlay size={18} />
         </button>
 
-        {/* Share */}
         <button
           onClick={() => {
             navigator.clipboard.writeText(window.location.href);
             setCopied(true);
             setTimeout(() => setCopied(false), 1200);
           }}
-          className="p-2 bg-gray-700 hover:bg-gray-600 rounded-md"
-          title="Share"
+          className="p-2 bg-gray-700 rounded-md hover:bg-gray-600"
         >
           {copied ? <FiCheck size={18} /> : <FiCopy size={18} />}
         </button>
 
-        {/* Fullscreen */}
-        <button onClick={toggleFullscreen} className="p-2 bg-gray-800 hover:bg-gray-700 rounded-md" title="Fullscreen">
+        <button 
+          onClick={toggleFullscreen} 
+          className="p-2 bg-gray-800 rounded-md hover:bg-gray-700"
+        >
           {isFullscreen ? <FiMinimize size={18} /> : <FiMaximize size={18} />}
         </button>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <ActivityBar theme={theme} setTheme={setTheme} />
-
-        <Sidebar
-          files={files}
-          onSelectFile={openFile}
-          onCreateFile={(p) => {
-            setCreateParent(p || null);
-            setCreateType("file");
-            setShowCreateModal(true);
-          }}
-          onCreateFolder={(p) => {
-            setCreateParent(p || null);
-            setCreateType("folder");
-            setShowCreateModal(true);
-          }}
-          onRename={(node, newName) => {
-            const rename = (arr) =>
-              arr.map((n) =>
-                n.id === node.id
-                  ? { ...n, name: newName }
-                  : n.type === "folder"
-                  ? { ...n, children: rename(n.children) }
-                  : n
-              );
-
-            setFiles((prev) => rename(prev));
-            setOpenTabs((prev) => prev.map((t) => (t.id === node.id ? { ...t, name: newName } : t)));
-
-            if (activeFile?.id === node.id)
-              setActiveFile((a) => ({ ...a, name: newName }));
-          }}
-          onDelete={handleDelete}
-          activeFile={activeFile}
+        <ActivityBar
           theme={theme}
+          setTheme={setTheme}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          collaborators={collaborators}
         />
 
-        {/* Workspace */}
-        <div key={fadeKey} className="flex-1 flex flex-col">
+        {activeTab === "users" ? (
+          <CollaboratorsPanel roomId={roomId} accessToken={accessToken} />
+        ) : (
+          <Sidebar
+            files={files}
+            activeFile={activeFile}
+            theme={theme}
+            onSelectFile={(file) => {
+              setActiveFile(file);
+              setLanguage(getLanguage(file.name));
+              if (!openTabs.find((t) => t.id === file.id)) 
+                setOpenTabs([...openTabs, file]);
+            }}
+            onCreateFile={(p) => {
+              setCreateParent(p || null);
+              setCreateType("file");
+              setShowCreateModal(true);
+            }}
+            onCreateFolder={(p) => {
+              setCreateParent(p || null);
+              setCreateType("folder");
+              setShowCreateModal(true);
+            }}
+            onDelete={(node) => {
+              setFiles((prev) => prev.filter((f) => f.id !== node.id));
+              setOpenTabs((prev) => prev.filter((t) => t.id !== node.id));
+              if (activeFile?.id === node.id) setActiveFile(null);
+            }}
+          />
+        )}
 
-          {/* Tabs - smaller UI */}
-          <div className={`flex items-center border-b text-xs ${
-            theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
-          }`}>
+        {/* ===== Editor View ===== */}
+        <div key={fadeKey} className="flex flex-col flex-1 overflow-hidden">
+          <div
+            className={`flex items-center border-b flex-none ${
+              theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
+            }`}
+          >
             {openTabs.map((tab) => (
               <div
                 key={tab.id}
-                onClick={() => openFile(tab)}
-                className={`flex items-center gap-2 px-3 py-2 cursor-pointer ${
-                  activeFile?.id === tab.id
+                onClick={() => setActiveFile(tab)}
+                className={`px-3 py-2 flex items-center gap-2 text-xs cursor-pointer ${
+                  tab.id === activeFile?.id
                     ? "bg-indigo-500 text-white"
                     : "text-gray-400 hover:bg-gray-800"
                 }`}
               >
                 {tab.name}
-                <FiX onClick={(e) => { e.stopPropagation(); closeTab(tab); }} className="cursor-pointer" />
+                <FiX
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenTabs((prev) => prev.filter((t) => t.id !== tab.id));
+                  }}
+                />
               </div>
             ))}
           </div>
 
-          {/* Editor */}
-          <div className="flex-1 overflow-hidden">
+          <div className={`flex-1 overflow-hidden ${showTerminal ? 'h-0' : ''}`}>
             {activeFile ? (
               <Editor
                 height="100%"
@@ -420,35 +448,71 @@ export default function EditorPage() {
                 language={language}
                 value={activeFile.content}
                 onChange={handleEditorChange}
-                onMount={(editor) => {
-                  editorRef.current = editor;
+                onMount={(ed) => {
+                  editorRef.current = ed;
                   monacoEditor.setTheme(theme);
-                }}
-                options={{
-                  minimap: { enabled: true },
-                  fontSize: 14,
-                  automaticLayout: true,
-                  scrollBeyondLastLine: false,
                 }}
               />
             ) : (
               <div className="h-full flex items-center justify-center text-gray-500">
-                Open or create a file to start coding.
+                Create or open a file
               </div>
             )}
           </div>
 
           {/* Terminal */}
           {showTerminal && (
-            <div className="border-t border-gray-700" style={{ height: terminalHeight }}>
-              <div className="flex justify-between p-2 bg-gray-800 text-sm">
-                <span className="text-gray-300">Terminal</span>
-                <FiX className="cursor-pointer hover:text-red-400" onClick={() => setShowTerminal(false)} />
+            <div 
+              className={`border-t flex-none h-64 min-h-[200px] max-h-[400px] overflow-hidden animate-slideUp ${
+                theme === "dark-mode" 
+                  ? "bg-gray-900 border-gray-800" 
+                  : "bg-gray-100 border-gray-300"
+              }`}
+              style={{
+                animation: "slideUp 0.3s ease-out"
+              }}
+            >
+              <style>{`
+                @keyframes slideUp {
+                  from {
+                    transform: translateY(100%);
+                    opacity: 0;
+                  }
+                  to {
+                    transform: translateY(0);
+                    opacity: 1;
+                  }
+                }
+              `}</style>
+              
+              <div 
+                className={`flex justify-between px-3 py-2 text-sm select-none border-b h-10 ${
+                  theme === "dark-mode"
+                    ? "bg-gray-800 border-gray-700"
+                    : "bg-gray-200 border-gray-300"
+                }`}
+              >
+                <span className={theme === "dark-mode" ? "text-gray-300" : "text-gray-700"}>
+                  Terminal
+                </span>
+                <FiX
+                  className="cursor-pointer hover:text-red-400 transition-colors"
+                  onClick={() => setShowTerminal(false)}
+                />
               </div>
 
-              <div ref={terminalRef} className="p-3 text-sm overflow-y-auto font-mono">
+              <div
+                ref={terminalRef}
+                className={`p-3 overflow-y-auto font-mono text-sm ${
+                  theme === "dark-mode" ? "bg-gray-900" : "bg-gray-100"
+                }`}
+                style={{ height: "calc(100% - 40px)" }}
+              >
                 {output.map((line, i) => (
-                  <p key={i} className={`${getLogColor(line.type)} whitespace-pre-wrap`}>
+                  <p
+                    key={i}
+                    className={`${getLogColor(line.type)} whitespace-pre-wrap leading-relaxed`}
+                  >
                     {">"} {line.text}
                   </p>
                 ))}
@@ -456,7 +520,15 @@ export default function EditorPage() {
             </div>
           )}
 
-          <StatusBar theme={theme} />
+          <StatusBar
+            theme={theme}
+            setTheme={setTheme}
+            language={language}
+            autoSave={autoSave}
+            setAutoSave={setAutoSave}
+            isSaving={isSaving}
+            hasFileOpen={!!activeFile}
+          />
         </div>
       </div>
 
@@ -464,10 +536,14 @@ export default function EditorPage() {
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         type={createType}
-        onCreate={(name) => {
-          if (createType === "file") handleCreateFile(createParent, name);
-          else handleCreateFolder(createParent, name);
-        }}
+        onCreate={(name) =>
+          createType === "file"
+            ? handleCreateFile(createParent, name)
+            : setFiles((prev) => [
+                ...prev,
+                { id: makeId(), type: "folder", name, children: [] },
+              ])
+        }
       />
     </div>
   );

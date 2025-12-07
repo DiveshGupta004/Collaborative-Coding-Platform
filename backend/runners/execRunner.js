@@ -10,31 +10,41 @@ if (!fs.existsSync(TEMP_ROOT)) fs.mkdirSync(TEMP_ROOT, { recursive: true });
 /**
  * runProjectStream
  * - files: [{ name: "src/index.js", content: "..." }, ...]
- * - entry: path relative to project root, e.g. "index.js" or "src/main.cpp"
+ * - entry: "index.js" or "src/main.cpp"
  * - language: "javascript" | "python" | "cpp" | "java"
- * - socket: socket to emit events to
- * - runId: id for this run (used in events)
- * - timeout: ms before hard kill
+ * - runId: unique execution ID
+ * - timeout: execution time limit
+ * - onStdout(text)
+ * - onStderr(text)
+ * - onClose(exitCode)
  */
-export function runProjectStream({ files, entry, language, socket, runId = uuidv4(), timeout = 15000 }) {
+export function runProjectStream({
+  files,
+  entry,
+  language,
+  runId = uuidv4(),
+  timeout = 15000,
+  onStdout = () => {},
+  onStderr = () => {},
+  onClose = () => {},
+}) {
+
   const runDir = path.join(TEMP_ROOT, runId);
   fs.mkdirSync(runDir, { recursive: true });
 
   try {
-    // write files to disk preserving directories
+    // Write files to temp execution folder
     for (const f of files || []) {
-      // sanitize filename a bit (no absolute paths)
       const safeName = f.name.replace(/^\/+/, "");
-      const target = path.join(runDir, safeName);
-      const dirname = path.dirname(target);
-      if (!fs.existsSync(dirname)) fs.mkdirSync(dirname, { recursive: true });
-      fs.writeFileSync(target, f.content ?? "", "utf8");
+      const filePath = path.join(runDir, safeName);
+
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, f.content ?? "", "utf8");
     }
 
-    // prepare command for different languages
+    // 🔧 Select command based on language
     let command;
     let args = [];
-    let opts = { cwd: runDir, env: { ...process.env } };
 
     if (language === "javascript") {
       command = "node";
@@ -43,66 +53,56 @@ export function runProjectStream({ files, entry, language, socket, runId = uuidv
       command = "python";
       args = [entry];
     } else if (language === "cpp") {
-      // compile then run
-      // compile to ./a.out inside runDir
       command = "bash";
       args = ["-lc", `g++ "${entry}" -O2 -std=c++17 -o a.out && ./a.out`];
     } else if (language === "java") {
-      // compile all java files then run Main (caller should ensure Main exists)
       command = "bash";
       args = ["-lc", `javac $(find . -name "*.java") && java -cp . Main`];
     } else {
-      socket.emit("run-output", { runId, text: `Unsupported language: ${language}\n` });
-      socket.emit("run-finished", { runId, code: 1, timedOut: false });
-      cleanup();
+      onStderr(`❌ Unsupported language: ${language}\n`);
+      onClose(1);
+      cleanup(runDir);
       return;
     }
 
-    socket.emit("run-started", { runId });
+    // Run with live stream
+    const proc = spawn(command, args, { cwd: runDir });
 
-    const proc = spawn(command, args, opts);
-
-    const killTimer = setTimeout(() => {
-      try { proc.kill("SIGKILL"); } catch (e) {}
-      socket.emit("run-output", { runId, text: "\nProcess killed: timeout\n" });
-      socket.emit("run-finished", { runId, code: null, timedOut: true });
-      cleanup();
+    // Kill if too long
+    const timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      onStderr("\n⛔ Execution stopped: timeout exceeded\n");
+      onClose(null);
+      cleanup(runDir);
     }, timeout);
 
-    proc.stdout.on("data", (d) => {
-      socket.emit("run-output", { runId, text: d.toString() });
-    });
+    // Output handling
+    proc.stdout.on("data", (d) => onStdout(d.toString()));
+    proc.stderr.on("data", (d) => onStderr(d.toString()));
 
-    proc.stderr.on("data", (d) => {
-      socket.emit("run-output", { runId, text: d.toString(), isErr: true });
-    });
-
-    proc.on("close", (code, signal) => {
-      clearTimeout(killTimer);
-      socket.emit("run-output", { runId, text: `\nProcess exited with code ${code}\n` });
-      socket.emit("run-finished", { runId, code, timedOut: false, signal });
-      cleanup();
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      onStdout(`\n✔ Process finished with exit code: ${code}\n`);
+      onClose(code);
+      cleanup(runDir);
     });
 
     proc.on("error", (err) => {
-      clearTimeout(killTimer);
-      socket.emit("run-output", { runId, text: `\nProcess error: ${err.message}\n` });
-      socket.emit("run-finished", { runId, code: 1, timedOut: false });
-      cleanup();
+      clearTimeout(timer);
+      onStderr(`❌ Runtime error: ${err.message}\n`);
+      onClose(1);
+      cleanup(runDir);
     });
 
   } catch (err) {
-    socket.emit("run-output", { runId, text: `\nRunner error: ${String(err)}\n` });
-    socket.emit("run-finished", { runId, code: 1, timedOut: false });
-    cleanup();
+    onStderr(`❌ Runner Error: ${err.message}\n`);
+    onClose(1);
+    cleanup(runDir);
   }
+}
 
-  function cleanup() {
-    // best-effort remove temporary directory (non-blocking)
-    try {
-      fs.rmSync(runDir, { recursive: true, force: true });
-    } catch (e) {
-      // ignore cleanup errors
-    }
-  }
+function cleanup(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {}
 }
