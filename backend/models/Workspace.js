@@ -53,7 +53,7 @@ const workspaceSchema = new mongoose.Schema(
     },
 
     openTabs: {
-      type: [String],
+      type: [fileSchema],
       default: [],
     },
 

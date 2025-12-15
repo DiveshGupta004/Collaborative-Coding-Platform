@@ -145,12 +145,12 @@ export default function EditorPage() {
   /* -------- Kick Collaborator ------- */
   const handleKickCollaborator = (email) => {
     if (!socketRef.current) return;
-    
+
     socketRef.current.emit("kick-collaborator", {
       roomId,
       email
     });
-    
+
     toast.success(`Removed ${email} from workspace`);
     fetchMembers();
   };
@@ -199,16 +199,16 @@ export default function EditorPage() {
     socket.on("run-output", ({ text, isErr }) => {
       setOutput((prev) => [...prev, { type: isErr ? "error" : "stream", text }]);
       setTimeout(() => {
-        terminalRef.current?.scrollTo({ 
-          top: terminalRef.current.scrollHeight, 
-          behavior: "smooth" 
+        terminalRef.current?.scrollTo({
+          top: terminalRef.current.scrollHeight,
+          behavior: "smooth"
         });
       }, 50);
     });
 
     socket.on("run-finished", ({ code }) => {
       setOutput((prev) => [
-        ...prev, 
+        ...prev,
         { type: "info", text: `\n🟢 Finished (exit: ${code})\n` }
       ]);
     });
@@ -401,8 +401,8 @@ export default function EditorPage() {
     >
       {/* ==== Top Right Controls ==== */}
       <div className="absolute right-4 top-3 z-50 flex gap-3">
-        <button 
-          onClick={handleRun} 
+        <button
+          onClick={handleRun}
           className="p-2 bg-indigo-600 rounded-md hover:bg-indigo-700"
         >
           <FiPlay size={18} />
@@ -419,8 +419,8 @@ export default function EditorPage() {
           {copied ? <FiCheck size={18} /> : <FiCopy size={18} />}
         </button>
 
-        <button 
-          onClick={toggleFullscreen} 
+        <button
+          onClick={toggleFullscreen}
           className="p-2 bg-gray-800 rounded-md hover:bg-gray-700"
         >
           {isFullscreen ? <FiMinimize size={18} /> : <FiMaximize size={18} />}
@@ -437,8 +437,8 @@ export default function EditorPage() {
         />
 
         {activeTab === "users" ? (
-          <CollaboratorsPanel 
-            roomId={roomId} 
+          <CollaboratorsPanel
+            roomId={roomId}
             accessToken={accessToken}
             onMembersChange={setCollaborators}
             onKickCollaborator={handleKickCollaborator}
@@ -451,7 +451,7 @@ export default function EditorPage() {
             onSelectFile={(file) => {
               setActiveFile(file);
               setLanguage(getLanguage(file.name));
-              if (!openTabs.find((t) => t.id === file.id)) 
+              if (!openTabs.find((t) => t.id === file.id))
                 setOpenTabs([...openTabs, file]);
             }}
             onCreateFile={(p) => {
@@ -482,7 +482,10 @@ export default function EditorPage() {
             {openTabs.map((tab) => (
               <div
                 key={tab.id}
-                onClick={() => setActiveFile(tab)}
+                onClick={() => {
+                  setActiveFile(tab);
+                  setLanguage(getLanguage(tab.name));
+                }}
                 className={`px-3 py-2 flex items-center gap-2 text-xs cursor-pointer ${
                   tab.id === activeFile?.id
                     ? "bg-indigo-500 text-white"
@@ -493,8 +496,24 @@ export default function EditorPage() {
                 <FiX
                   onClick={(e) => {
                     e.stopPropagation();
-                    setOpenTabs((prev) => prev.filter((t) => t.id !== tab.id));
+                    const newTabs = openTabs.filter((t) => t.id !== tab.id);
+                    setOpenTabs(newTabs);
+
+                    // If closing the active tab, switch to another tab
+                    if (activeFile?.id === tab.id) {
+                      if (newTabs.length > 0) {
+                        // Switch to the last remaining tab
+                        const lastTab = newTabs[newTabs.length - 1];
+                        setActiveFile(lastTab);
+                        setLanguage(getLanguage(lastTab.name));
+                      } else {
+                        // No tabs left, clear active file
+                        setActiveFile(null);
+                        setLanguage("");
+                      }
+                    }
                   }}
+                  className="hover:text-red-400 transition-colors"
                 />
               </div>
             ))}
@@ -522,10 +541,10 @@ export default function EditorPage() {
 
           {/* Terminal */}
           {showTerminal && (
-            <div 
+            <div
               className={`border-t flex-none h-64 min-h-[200px] max-h-[400px] overflow-hidden animate-slideUp ${
-                theme === "dark-mode" 
-                  ? "bg-gray-900 border-gray-800" 
+                theme === "dark-mode"
+                  ? "bg-gray-900 border-gray-800"
                   : "bg-gray-100 border-gray-300"
               }`}
               style={{
@@ -544,8 +563,8 @@ export default function EditorPage() {
                   }
                 }
               `}</style>
-              
-              <div 
+
+              <div
                 className={`flex justify-between px-3 py-2 text-sm select-none border-b h-10 ${
                   theme === "dark-mode"
                     ? "bg-gray-800 border-gray-700"
