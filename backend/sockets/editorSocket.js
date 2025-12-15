@@ -13,7 +13,7 @@ export default function editorSocket(socket, io) {
         process.env.JWT_SECRET || "secret"
       );
       socket.user = decoded;
-    } catch {}
+    } catch { }
   }
 
   /* ---------------- JOIN ROOM ---------------- */
@@ -35,6 +35,14 @@ export default function editorSocket(socket, io) {
       socket.email = email;
       socket.user = user || socket.user;
 
+      // 🔥 SEND FULL WORKSPACE SNAPSHOT
+      socket.emit("workspace-init", {
+        files: workspace.files || [],
+        openTabs: workspace.openTabs || [],
+        activeFileId: workspace.activeFileId || null,
+      });
+
+      // Also emit old format for backward compatibility
       socket.emit("load-code", workspace.files || []);
       socket.emit("joined-authorized");
 
@@ -50,9 +58,28 @@ export default function editorSocket(socket, io) {
     }
   });
 
-  /* ---------------- CODE SYNC ---------------- */
-  socket.on("code-change", ({ roomId, code }) => {
-    socket.to(roomId).emit("receive-changes", code);
+  /* ---------------- FILE TREE SYNC ---------------- */
+  socket.on("files-update", async ({ roomId, files }) => {
+    socket.to(roomId).emit("files-sync", files);
+  });
+
+  /* ---------------- CODE SYNC (PER FILE) ---------------- */
+  socket.on("code-change", ({ roomId, code, fileId }) => {
+    // Support both formats
+    if (fileId) {
+      socket.to(roomId).emit("receive-changes", { fileId, code });
+    } else {
+      socket.to(roomId).emit("receive-changes", code);
+    }
+  });
+
+  /* ---------------- CURSOR SYNC ---------------- */
+  socket.on("cursor-move", ({ roomId, fileId, position }) => {
+    socket.to(roomId).emit("cursor-update", {
+      fileId,
+      email: socket.email,
+      position,
+    });
   });
 
   /* ---------------- RUN PROJECT ---------------- */
@@ -79,27 +106,50 @@ export default function editorSocket(socket, io) {
   /* ---------------- KICK COLLABORATOR ---------------- */
   socket.on("kick-collaborator", async ({ roomId, email }) => {
     try {
+      if (!socket.user?.id) return;
+
       const workspace = await Workspace.findOne({ roomId });
       if (!workspace) return;
 
-      workspace.allowedUsers = workspace.allowedUsers.filter(
-        (e) => e !== email
-      );
+      // 🔐 ONLY OWNER CAN REMOVE
+      if (String(workspace.owner) !== String(socket.user.id)) {
+        return socket.emit("action-denied", {
+          message: "Only owner can remove collaborators",
+        });
+      }
+
+      const cleanEmail = email.trim().toLowerCase();
+
+      // 🚫 Owner cannot remove self
+      if (cleanEmail === socket.email) {
+        return socket.emit("action-denied", {
+          message: "Owner cannot remove themselves",
+        });
+      }
+
+      // Remove from DB
+      workspace.allowedUsers = workspace.allowedUsers
+        .map(e => e.trim().toLowerCase())
+        .filter(e => e !== cleanEmail);
+
       await workspace.save();
 
+      // Kick active socket if connected
       const sockets = await io.in(roomId).fetchSockets();
       sockets.forEach((s) => {
-        if (s.email === email) {
+        if (s.email === cleanEmail) {
           s.leave(roomId);
-          s.emit("removed-from-workspace");
+          s.emit("user-kicked");
         }
       });
 
-      io.to(roomId).emit("collaborator-removed", { email });
+      io.to(roomId).emit("collaborator-removed", { email: cleanEmail });
+
     } catch (err) {
       console.error("KICK COLLAB ERROR:", err);
     }
   });
+
 
   /* ---------------- DISCONNECT ---------------- */
   socket.on("disconnect", () => {

@@ -27,7 +27,7 @@ import axios from "axios";
 /* -------- SERVER DETECTION -------- */
 const SERVER_URL =
   window.location.hostname === "localhost" ||
-  window.location.hostname === "127.0.0.1"
+    window.location.hostname === "127.0.0.1"
     ? "http://localhost:4000"
     : window.location.origin;
 
@@ -38,7 +38,7 @@ const makeId = () =>
 function requestFullscreenSoft() {
   const el = document.documentElement;
   if (!document.fullscreenElement && el.requestFullscreen) {
-    el.requestFullscreen().catch(() => {});
+    el.requestFullscreen().catch(() => { });
   }
 }
 
@@ -111,6 +111,7 @@ export default function EditorPage() {
   const terminalRef = useRef(null);
   const activeFileRef = useRef(null);
   const debounceRef = useRef(null);
+  const cursorDecorationsRef = useRef([]);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createType, setCreateType] = useState("file");
@@ -131,16 +132,29 @@ export default function EditorPage() {
       });
 
       const { owner, collaborators } = res.data;
+
       const formatted = [
-        { ...owner, role: "Owner" },
-        ...collaborators.map((c) => ({ ...c, role: "Collaborator" })),
+        {
+          email: owner.email,
+          username: owner.username,
+          role: "Owner",
+          displayName: owner.username || owner.email,
+        },
+        ...(collaborators || []).map((c) => ({
+          email: c.email,
+          username: c.username,
+          role: "Collaborator",
+          displayName: c.username || c.email,
+        })),
       ];
 
       setCollaborators(formatted);
-    } catch {
+    } catch (err) {
+      console.error("❌ Failed loading members:", err);
       setCollaborators([]);
     }
   };
+
 
   /* -------- Kick Collaborator ------- */
   const handleKickCollaborator = (email) => {
@@ -213,6 +227,31 @@ export default function EditorPage() {
       ]);
     });
 
+    // 🔥 NEW: Workspace Init (full snapshot)
+    socket.on("workspace-init", ({ files, openTabs, activeFileId }) => {
+      const assign = (arr) =>
+        arr.map((n) => ({
+          ...n,
+          id: n.id || makeId(),
+          ...(n.type === "folder" && { children: assign(n.children || []) }),
+        }));
+
+      const f = assign(files || []);
+      const t = assign(openTabs || []);
+
+      setFiles(f);
+      setOpenTabs(t);
+
+      if (activeFileId) {
+        const match = findFileById(f, activeFileId);
+        if (match) {
+          setActiveFile(match);
+          setLanguage(getLanguage(match.name));
+        }
+      }
+    });
+
+    // Keep backward compatibility with load-code
     socket.on("load-code", async () => {
       let saved = loadWorkspace(roomId);
 
@@ -246,11 +285,29 @@ export default function EditorPage() {
       }
     });
 
-    socket.on("receive-changes", (code) => {
-      if (!activeFileRef.current) return;
+    // 🔥 NEW: Per-file code changes
+    socket.on("receive-changes", (data) => {
+      // Support both formats
+      if (typeof data === "string") {
+        // Old format: just code string
+        if (!activeFileRef.current) return;
+        setFiles((prev) => updateFileContent(prev, activeFileRef.current.id, data));
+        setActiveFile({ ...activeFileRef.current, content: data });
+      } else {
+        // New format: { fileId, code }
+        const { fileId, code } = data;
+        setFiles((prev) => updateFileContent(prev, fileId, code));
 
-      setFiles((prev) => updateFileContent(prev, activeFileRef.current.id, code));
-      setActiveFile({ ...activeFileRef.current, content: code });
+        // Update active file if it's the one being changed
+        if (activeFileRef.current?.id === fileId) {
+          setActiveFile({ ...activeFileRef.current, content: code });
+        }
+      }
+    });
+
+    // 🔥 NEW: File tree sync
+    socket.on("files-sync", (syncedFiles) => {
+      setFiles(syncedFiles);
     });
 
     socket.on("access-denied", () => {
@@ -292,12 +349,48 @@ export default function EditorPage() {
       socket.off("access-denied");
       socket.off("receive-changes");
       socket.off("load-code");
+      socket.off("workspace-init");
+      socket.off("files-sync");
       socket.off("run-finished");
       socket.off("run-output");
       socket.off("run-started");
       socket.disconnect();
     };
   }, [roomId, accessToken, navigate, user]);
+
+  /* -------- 🔥 NEW: Cursor Sync -------- */
+  useEffect(() => {
+    if (!socketRef.current || !editorRef.current || !activeFile) return;
+
+    const handleCursorUpdate = ({ fileId, email, position }) => {
+      if (fileId !== activeFile?.id || !editorRef.current) return;
+
+      // Clear previous decorations
+      cursorDecorationsRef.current = editorRef.current.deltaDecorations(
+        cursorDecorationsRef.current,
+        [
+          {
+            range: new monacoEditor.Range(
+              position.lineNumber,
+              position.column,
+              position.lineNumber,
+              position.column
+            ),
+            options: {
+              className: "remote-cursor",
+              hoverMessage: { value: email },
+            },
+          },
+        ]
+      );
+    };
+
+    socketRef.current.on("cursor-update", handleCursorUpdate);
+
+    return () => {
+      socketRef.current?.off("cursor-update", handleCursorUpdate);
+    };
+  }, [activeFile]);
 
   /* -------- Setup Theme -------- */
   useEffect(() => {
@@ -337,17 +430,25 @@ export default function EditorPage() {
     requestFullscreenSoft();
     const file = { id: makeId(), name, content: "", type: "file" };
 
-    if (parent?.type === "folder")
-      setFiles((prev) =>
-        prev.map((n) =>
-          n.id === parent.id ? { ...n, children: [...n.children, file] } : n
-        )
+    let updatedFiles;
+    if (parent?.type === "folder") {
+      updatedFiles = files.map((n) =>
+        n.id === parent.id ? { ...n, children: [...n.children, file] } : n
       );
-    else setFiles((prev) => [...prev, file]);
+    } else {
+      updatedFiles = [...files, file];
+    }
 
+    setFiles(updatedFiles);
     setActiveFile(file);
     setOpenTabs((prev) => [...prev, file]);
     setLanguage(getLanguage(name));
+
+    // 🔥 NEW: Sync file tree to other clients
+    socketRef.current?.emit("files-update", {
+      roomId,
+      files: updatedFiles,
+    });
   };
 
   const handleRun = () => {
@@ -374,7 +475,12 @@ export default function EditorPage() {
 
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      socketRef.current.emit("code-change", { roomId, code: value });
+      // 🔥 NEW: Send fileId with code changes
+      socketRef.current.emit("code-change", {
+        roomId,
+        fileId: activeFile.id,
+        code: value,
+      });
     }, 200);
 
     if (autoSave) setIsSaving(true);
@@ -395,9 +501,8 @@ export default function EditorPage() {
 
   return (
     <div
-      className={`h-screen flex flex-col ${
-        theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-900"
-      }`}
+      className={`h-screen flex flex-col ${theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-900"
+        }`}
     >
       {/* ==== Top Right Controls ==== */}
       <div className="absolute right-4 top-3 z-50 flex gap-3">
@@ -440,6 +545,7 @@ export default function EditorPage() {
           <CollaboratorsPanel
             roomId={roomId}
             accessToken={accessToken}
+            currentUserEmail={user.email}
             onMembersChange={setCollaborators}
             onKickCollaborator={handleKickCollaborator}
           />
@@ -465,9 +571,16 @@ export default function EditorPage() {
               setShowCreateModal(true);
             }}
             onDelete={(node) => {
-              setFiles((prev) => prev.filter((f) => f.id !== node.id));
+              const updatedFiles = files.filter((f) => f.id !== node.id);
+              setFiles(updatedFiles);
               setOpenTabs((prev) => prev.filter((t) => t.id !== node.id));
               if (activeFile?.id === node.id) setActiveFile(null);
+
+              // 🔥 NEW: Sync file deletion
+              socketRef.current?.emit("files-update", {
+                roomId,
+                files: updatedFiles,
+              });
             }}
           />
         )}
@@ -475,9 +588,8 @@ export default function EditorPage() {
         {/* ===== Editor View ===== */}
         <div key={fadeKey} className="flex flex-col flex-1 overflow-hidden">
           <div
-            className={`flex items-center border-b flex-none ${
-              theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
-            }`}
+            className={`flex items-center border-b flex-none ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
+              }`}
           >
             {openTabs.map((tab) => (
               <div
@@ -486,11 +598,10 @@ export default function EditorPage() {
                   setActiveFile(tab);
                   setLanguage(getLanguage(tab.name));
                 }}
-                className={`px-3 py-2 flex items-center gap-2 text-xs cursor-pointer ${
-                  tab.id === activeFile?.id
-                    ? "bg-indigo-500 text-white"
-                    : "text-gray-400 hover:bg-gray-800"
-                }`}
+                className={`px-3 py-2 flex items-center gap-2 text-xs cursor-pointer ${tab.id === activeFile?.id
+                  ? "bg-indigo-500 text-white"
+                  : "text-gray-400 hover:bg-gray-800"
+                  }`}
               >
                 {tab.name}
                 <FiX
@@ -527,9 +638,20 @@ export default function EditorPage() {
                 language={language}
                 value={activeFile.content}
                 onChange={handleEditorChange}
-                onMount={(ed) => {
-                  editorRef.current = ed;
+                onMount={(editor) => {
+                  editorRef.current = editor;
                   monacoEditor.setTheme(theme);
+
+                  // 🔥 NEW: Track cursor position and emit to other users
+                  editor.onDidChangeCursorPosition((e) => {
+                    if (socketRef.current && activeFile) {
+                      socketRef.current.emit("cursor-move", {
+                        roomId,
+                        fileId: activeFile.id,
+                        position: e.position,
+                      });
+                    }
+                  });
                 }}
               />
             ) : (
@@ -542,11 +664,10 @@ export default function EditorPage() {
           {/* Terminal */}
           {showTerminal && (
             <div
-              className={`border-t flex-none h-64 min-h-[200px] max-h-[400px] overflow-hidden animate-slideUp ${
-                theme === "dark-mode"
-                  ? "bg-gray-900 border-gray-800"
-                  : "bg-gray-100 border-gray-300"
-              }`}
+              className={`border-t flex-none h-64 min-h-[200px] max-h-[400px] overflow-hidden animate-slideUp ${theme === "dark-mode"
+                ? "bg-gray-900 border-gray-800"
+                : "bg-gray-100 border-gray-300"
+                }`}
               style={{
                 animation: "slideUp 0.3s ease-out"
               }}
@@ -562,14 +683,17 @@ export default function EditorPage() {
                     opacity: 1;
                   }
                 }
+                .remote-cursor {
+                  background-color: rgba(59, 130, 246, 0.3);
+                  border-left: 2px solid rgb(59, 130, 246);
+                }
               `}</style>
 
               <div
-                className={`flex justify-between px-3 py-2 text-sm select-none border-b h-10 ${
-                  theme === "dark-mode"
-                    ? "bg-gray-800 border-gray-700"
-                    : "bg-gray-200 border-gray-300"
-                }`}
+                className={`flex justify-between px-3 py-2 text-sm select-none border-b h-10 ${theme === "dark-mode"
+                  ? "bg-gray-800 border-gray-700"
+                  : "bg-gray-200 border-gray-300"
+                  }`}
               >
                 <span className={theme === "dark-mode" ? "text-gray-300" : "text-gray-700"}>
                   Terminal
@@ -582,9 +706,8 @@ export default function EditorPage() {
 
               <div
                 ref={terminalRef}
-                className={`p-3 overflow-y-auto font-mono text-sm ${
-                  theme === "dark-mode" ? "bg-gray-900" : "bg-gray-100"
-                }`}
+                className={`p-3 overflow-y-auto font-mono text-sm ${theme === "dark-mode" ? "bg-gray-900" : "bg-gray-100"
+                  }`}
                 style={{ height: "calc(100% - 40px)" }}
               >
                 {output.map((line, i) => (
@@ -618,10 +741,19 @@ export default function EditorPage() {
         onCreate={(name) =>
           createType === "file"
             ? handleCreateFile(createParent, name)
-            : setFiles((prev) => [
-                ...prev,
+            : (() => {
+              const updatedFiles = [
+                ...files,
                 { id: makeId(), type: "folder", name, children: [] },
-              ])
+              ];
+              setFiles(updatedFiles);
+
+              // 🔥 NEW: Sync folder creation
+              socketRef.current?.emit("files-update", {
+                roomId,
+                files: updatedFiles,
+              });
+            })()
         }
       />
     </div>

@@ -157,23 +157,33 @@ export const getCollaborators = async (req, res) => {
     const { roomId } = req.params;
 
     const workspace = await Workspace.findOne({ roomId })
-      .populate("owner", "username email");
+      .populate("owner", "email username");
 
     if (!workspace) {
       return res.status(404).json({ message: "Workspace not found" });
     }
 
+    // fetch collaborator user objects
+    const users = await User.find(
+      { email: { $in: workspace.allowedUsers } },
+      "email username"
+    );
+
+    // remove owner from collaborators list
+    const collaborators = users.filter(
+      (u) => u.email !== workspace.owner.email
+    );
+
     res.json({
       owner: workspace.owner,
-      collaborators: workspace.allowedUsers.filter(
-        (email) => email !== workspace.owner.email
-      ),
+      collaborators,
     });
-  } catch (error) {
-    console.error("GET COLLABORATORS ERROR:", error);
+  } catch (err) {
+    console.error("GET COLLABORATORS ERROR:", err);
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
 
 
 
