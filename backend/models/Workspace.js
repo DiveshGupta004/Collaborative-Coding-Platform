@@ -4,15 +4,18 @@ import { v4 as uuidv4 } from "uuid";
 /* ---------- File Schema (Recursive + Stable) ---------- */
 const fileSchema = new mongoose.Schema(
   {
-    id: { type: String, required: true }, 
+    id: { type: String, required: true },
     name: { type: String, required: true },
     type: { type: String, enum: ["file", "folder"], required: true },
     content: { type: String, default: "" },
 
     // Recursive structure
-    children: { type: [mongoose.Schema.Types.Mixed], default: [] },
+    children: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: [],
+    },
   },
-  { _id: false } // IMPORTANT: prevents MongoDB from creating extra _id fields for each file
+  { _id: false }
 );
 
 /* ---------- Workspace Schema ---------- */
@@ -26,7 +29,6 @@ const workspaceSchema = new mongoose.Schema(
 
     roomId: {
       type: String,
-      required: true,
       unique: true,
       default: uuidv4,
     },
@@ -37,26 +39,21 @@ const workspaceSchema = new mongoose.Schema(
       required: true,
     },
 
-    collaborators: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-
+    /* ✅ SINGLE SOURCE OF TRUTH */
     allowedUsers: {
-      type: [String],
+      type: [String], // emails (owner + collaborators)
+      required: true,
       default: [],
     },
 
-    /* ---------- Saved Editor State ---------- */
+    /* ---------- Editor State ---------- */
     files: {
       type: [fileSchema],
       default: [],
     },
 
     openTabs: {
-      type: Array,
+      type: [String],
       default: [],
     },
 

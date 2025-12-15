@@ -2,10 +2,16 @@ import { useEffect, useState } from "react";
 import { FiPlus, FiUsers, FiXCircle } from "react-icons/fi";
 import toast from "react-hot-toast";
 import api from "../api/axios";
+import { socket } from "../socket";
 
-export default function CollaboratorsPanel({ roomId, accessToken }) {
-  const [collaborators, setCollaborators] = useState([]);
+export default function CollaboratorsPanel({
+  roomId,
+  accessToken,
+  onMembersChange,
+}) {
+  const [members, setMembers] = useState([]);
   const [email, setEmail] = useState("");
+  const [ownerEmail, setOwnerEmail] = useState("");
 
   const fetchMembers = async () => {
     try {
@@ -13,22 +19,35 @@ export default function CollaboratorsPanel({ roomId, accessToken }) {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      const data = res.data?.workspace || res.data;
+      const { owner, collaborators } = res.data;
 
-      const owner = data?.owner ? [{ ...data.owner, role: "Owner" }] : [];
-      const collabs = Array.isArray(data?.collaborators)
-        ? data.collaborators.map((u) => ({ ...u, role: "Collaborator" }))
-        : [];
+      // Store owner email for validation
+      setOwnerEmail(owner.email);
 
-      setCollaborators([...owner, ...collabs]);
-    } catch (error) {
-      console.log("❌ Failed loading members:", error);
+      const formatted = [
+        { email: owner.email, role: "Owner", username: owner.username },
+        ...(collaborators || []).map((e) => ({
+          email: e,
+          role: "Collaborator",
+        })),
+      ];
+
+      setMembers(formatted);
+      
+      // 🔥 Update ActivityBar if callback provided
+      if (onMembersChange) {
+        onMembersChange(formatted);
+      }
+    } catch (err) {
+      console.error("❌ Failed loading members:", err);
       toast.error("Error loading members");
     }
   };
 
   useEffect(() => {
-    if (roomId && accessToken) fetchMembers();
+    if (roomId && accessToken) {
+      fetchMembers();
+    }
   }, [roomId, accessToken]);
 
   const addMember = async () => {
@@ -44,12 +63,18 @@ export default function CollaboratorsPanel({ roomId, accessToken }) {
       toast.success("Collaborator added");
       setEmail("");
       fetchMembers();
-    } catch {
-      toast.error("Failed to add collaborator");
+    } catch (err) {
+      const errorMsg = err.response?.data?.message || "Failed to add collaborator";
+      toast.error(errorMsg);
     }
   };
 
   const removeMember = async (userEmail) => {
+    // ✅ CLIENT-SIDE VALIDATION: Prevent removing owner
+    if (userEmail === ownerEmail) {
+      return toast.error("Owner cannot be removed");
+    }
+
     try {
       await api.post(
         `/workspace/${roomId}/remove`,
@@ -57,17 +82,33 @@ export default function CollaboratorsPanel({ roomId, accessToken }) {
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
+      // 🔥 KICK USER VIA SOCKET (CRITICAL)
+      socket.emit("kick-collaborator", {
+        roomId,
+        email: userEmail,
+      });
+
+      // 🔥 UPDATE LOCAL STATE (NO REFETCH NEEDED)
+      const updated = members.filter((u) => u.email !== userEmail);
+      setMembers(updated);
+      
+      // Update ActivityBar if callback provided
+      if (onMembersChange) {
+        onMembersChange(updated);
+      }
+
       toast.success("Collaborator removed");
-      fetchMembers();
-    } catch {
-      toast.error("Failed removing collaborator");
+    } catch (err) {
+      // Handle server-side validation error
+      const errorMsg = err.response?.data?.message || "Failed removing collaborator";
+      toast.error(errorMsg);
     }
   };
 
   return (
     <div className="w-64 h-full bg-gray-900 p-4 border-r border-gray-800 flex flex-col">
       <div className="flex items-center gap-2 mb-4 text-lg text-indigo-400">
-        <FiUsers /> Members ({collaborators.length})
+        <FiUsers /> Members ({members.length})
       </div>
 
       <div className="flex gap-2 mb-3">
@@ -76,6 +117,9 @@ export default function CollaboratorsPanel({ roomId, accessToken }) {
           onChange={(e) => setEmail(e.target.value)}
           className="flex-1 px-2 py-2 bg-gray-800 text-sm rounded"
           placeholder="Add email..."
+          onKeyPress={(e) => {
+            if (e.key === "Enter") addMember();
+          }}
         />
         <button
           onClick={addMember}
@@ -86,7 +130,7 @@ export default function CollaboratorsPanel({ roomId, accessToken }) {
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-2">
-        {collaborators.map((user, i) => (
+        {members.map((user, i) => (
           <div key={i} className="flex justify-between p-2 bg-gray-800 rounded">
             <div>
               <p className="text-sm">{user.username || user.email}</p>
@@ -96,7 +140,7 @@ export default function CollaboratorsPanel({ roomId, accessToken }) {
             {user.role !== "Owner" && (
               <FiXCircle
                 onClick={() => removeMember(user.email)}
-                className="cursor-pointer text-red-400 hover:text-red-500"
+                className="cursor-pointer text-red-400 hover:text-red-500 transition"
               />
             )}
           </div>

@@ -18,7 +18,6 @@ export const createWorkspace = async (req, res) => {
       projectName,
       roomId,
       owner: req.user.id,
-      collaborators: [],
       allowedUsers: [req.user.email],
     });
 
@@ -73,40 +72,45 @@ export const deleteWorkspace = async (req, res) => {
 export const addCollaborator = async (req, res) => {
   try {
     const { roomId } = req.params;
-    const { email } = req.body;
+    let { email } = req.body;
 
     if (!email) {
       return res.status(400).json({ message: "Email is required" });
     }
+
+    // 🔒 Normalize email
+    email = email.trim().toLowerCase();
 
     const workspace = await Workspace.findOne({ roomId });
     if (!workspace) {
       return res.status(404).json({ message: "Workspace not found" });
     }
 
+    // 🔐 Only owner can add
     if (String(workspace.owner) !== String(req.user.id)) {
       return res.status(403).json({ message: "Only owner can add collaborators" });
     }
 
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
+    // 🚫 Owner cannot add themselves
+    if (email === req.user.email.toLowerCase()) {
+      return res.status(400).json({
+        message: "Owner is already part of the workspace",
+      });
     }
 
-    if (workspace.collaborators.some((id) => String(id) === String(user._id))) {
-      return res.status(400).json({ message: "User is already a collaborator" });
+    // 🚫 Prevent duplicates
+    if (workspace.allowedUsers.includes(email)) {
+      return res.status(400).json({
+        message: "User already added to workspace",
+      });
     }
 
-    workspace.collaborators.push(user._id);
+    workspace.allowedUsers.push(email);
     await workspace.save();
-
-    const populated = await Workspace.findOne({ roomId })
-      .populate("owner", "username email")
-      .populate("collaborators", "username email");
 
     return res.status(200).json({
       message: "Collaborator added successfully",
-      workspace: populated,
+      allowedUsers: workspace.allowedUsers,
     });
   } catch (error) {
     console.error("ADD COLLABORATOR ERROR:", error);
@@ -114,16 +118,15 @@ export const addCollaborator = async (req, res) => {
   }
 };
 
+
+
 /* ---------------- REMOVE COLLABORATOR ---------------- */
 export const removeCollaborator = async (req, res) => {
   try {
     const { roomId } = req.params;
     const { email } = req.body;
 
-    const workspace = await Workspace.findOne({ roomId }).populate(
-      "collaborators",
-      "email"
-    );
+    const workspace = await Workspace.findOne({ roomId });
     if (!workspace) {
       return res.status(404).json({ message: "Workspace not found" });
     }
@@ -132,23 +135,15 @@ export const removeCollaborator = async (req, res) => {
       return res.status(403).json({ message: "Only owner can remove collaborators" });
     }
 
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    workspace.collaborators = workspace.collaborators.filter(
-      (id) => String(id) !== String(user._id)
+    workspace.allowedUsers = workspace.allowedUsers.filter(
+      (e) => e !== email
     );
-    await workspace.save();
 
-    const populated = await Workspace.findOne({ roomId })
-      .populate("owner", "username email")
-      .populate("collaborators", "username email");
+    await workspace.save();
 
     return res.status(200).json({
       message: "Collaborator removed successfully",
-      workspace: populated,
+      allowedUsers: workspace.allowedUsers,
     });
   } catch (error) {
     console.error("REMOVE COLLABORATOR ERROR:", error);
@@ -156,26 +151,30 @@ export const removeCollaborator = async (req, res) => {
   }
 };
 
+
 export const getCollaborators = async (req, res) => {
   try {
     const { roomId } = req.params;
 
     const workspace = await Workspace.findOne({ roomId })
-      .populate("owner", "username email")
-      .populate("collaborators", "username email");
+      .populate("owner", "username email");
 
-    if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
 
     res.json({
       owner: workspace.owner,
-      collaborators: workspace.collaborators
+      collaborators: workspace.allowedUsers.filter(
+        (email) => email !== workspace.owner.email
+      ),
     });
-
   } catch (error) {
     console.error("GET COLLABORATORS ERROR:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
+
 
 
 /* ---------------------------------------------------------

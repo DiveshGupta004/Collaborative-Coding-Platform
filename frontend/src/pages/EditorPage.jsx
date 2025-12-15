@@ -142,6 +142,19 @@ export default function EditorPage() {
     }
   };
 
+  /* -------- Kick Collaborator ------- */
+  const handleKickCollaborator = (email) => {
+    if (!socketRef.current) return;
+    
+    socketRef.current.emit("kick-collaborator", {
+      roomId,
+      email
+    });
+    
+    toast.success(`Removed ${email} from workspace`);
+    fetchMembers();
+  };
+
   /* -------- SAVE TO DB -------- */
   const saveToDB = async () => {
     try {
@@ -169,7 +182,11 @@ export default function EditorPage() {
     socket.on("connect", () => {
       socket.emit("join-room", {
         roomId,
-        user: { id: user.id, username: user.username, email: user.email },
+        user: {
+          id: user.id,
+          email: user.email,
+          username: user.username || user.name
+        }
       });
       fetchMembers();
     });
@@ -241,7 +258,45 @@ export default function EditorPage() {
       navigate("/");
     });
 
-    return () => socket.disconnect();
+    socket.on("user-kicked", () => {
+      toast.error("You have been removed from this workspace");
+      navigate("/");
+    });
+
+    socket.on("user-joined", ({ email }) => {
+      setCollaborators((prev) =>
+        prev.some((u) => u.email === email)
+          ? prev
+          : [...prev, { email, role: "Collaborator" }]
+      );
+      toast.success(`${email} joined the workspace`);
+    });
+
+    socket.on("collaborator-removed", ({ email }) => {
+      setCollaborators((prev) =>
+        prev.filter((u) => u.email !== email)
+      );
+    });
+
+    socket.on("user-left", ({ email }) => {
+      setCollaborators((prev) =>
+        prev.filter((u) => u.email !== email)
+      );
+    });
+
+    return () => {
+      socket.off("user-joined");
+      socket.off("collaborator-removed");
+      socket.off("user-left");
+      socket.off("user-kicked");
+      socket.off("access-denied");
+      socket.off("receive-changes");
+      socket.off("load-code");
+      socket.off("run-finished");
+      socket.off("run-output");
+      socket.off("run-started");
+      socket.disconnect();
+    };
   }, [roomId, accessToken, navigate, user]);
 
   /* -------- Setup Theme -------- */
@@ -382,7 +437,12 @@ export default function EditorPage() {
         />
 
         {activeTab === "users" ? (
-          <CollaboratorsPanel roomId={roomId} accessToken={accessToken} />
+          <CollaboratorsPanel 
+            roomId={roomId} 
+            accessToken={accessToken}
+            onMembersChange={setCollaborators}
+            onKickCollaborator={handleKickCollaborator}
+          />
         ) : (
           <Sidebar
             files={files}
