@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useContext } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import Editor from "@monaco-editor/react";
 import { editor as monacoEditor } from "monaco-editor";
+import MessagesPanel from "../components/MessagesPanel";
+
 import io from "socket.io-client";
 import {
   FiCopy,
@@ -541,6 +543,7 @@ export default function EditorPage() {
           collaborators={collaborators}
         />
 
+        {/* Sidebar/Panel Area */}
         {activeTab === "users" ? (
           <CollaboratorsPanel
             roomId={roomId}
@@ -548,6 +551,13 @@ export default function EditorPage() {
             currentUserEmail={user.email}
             onMembersChange={setCollaborators}
             onKickCollaborator={handleKickCollaborator}
+          />
+        ) : activeTab === "messages" ? (
+          <MessagesPanel
+            roomId={roomId}
+            currentUserEmail={user.email}
+            theme={theme}
+            accessToken={accessToken}
           />
         ) : (
           <Sidebar

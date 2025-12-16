@@ -1,4 +1,6 @@
 import Workspace from "../models/Workspace.js";
+import Message from "../models/Message.js";
+
 import jwt from "jsonwebtoken";
 import { runProjectStream } from "../runners/execRunner.js";
 import { v4 as uuidv4 } from "uuid";
@@ -150,6 +152,135 @@ export default function editorSocket(socket, io) {
     }
   });
 
+  /* ---------------- MESSAGES ---------------- */
+  
+  // Join messages room (same as workspace room)
+  socket.on("join-messages", async ({ roomId }) => {
+    try {
+      // Extract user info from JWT if not already set
+      if (!socket.email) {
+        if (socket.handshake?.auth?.token) {
+          try {
+            const decoded = jwt.verify(
+              socket.handshake.auth.token,
+              process.env.JWT_SECRET || "secret"
+            );
+            
+            // Fetch user from database using the id from JWT
+            if (decoded.id) {
+              const User = (await import("../models/User.js")).default;
+              const user = await User.findById(decoded.id).select("email username");
+              
+              if (user) {
+                socket.email = user.email;
+                socket.user = {
+                  id: decoded.id,
+                  email: user.email,
+                  username: user.username
+                };
+              }
+            }
+          } catch (err) {
+            console.error("JWT verification error in join-messages:", err);
+          }
+        }
+      }
+      
+      socket.join(roomId);
+    } catch (err) {
+      console.error("JOIN MESSAGES ERROR:", err);
+    }
+  });
+
+  // Typing indicators
+  socket.on("typing", ({ roomId }) => {
+    const typingData = {
+      email: socket.email,
+      username: socket.user?.username || socket.email?.split("@")[0],
+    };
+    
+    socket.to(roomId).emit("user-typing", typingData);
+  });
+
+  socket.on("stop-typing", ({ roomId }) => {
+    socket.to(roomId).emit("user-stopped-typing", {
+      email: socket.email,
+    });
+  });
+
+  // Load previous messages from Message collection
+  socket.on("load-messages", async ({ roomId }) => {
+    try {
+      const messages = await Message.find({ roomId })
+        .sort({ createdAt: 1 })
+        .limit(200);
+      
+      socket.emit(
+        "messages-loaded",
+        messages.map((m) => ({
+          id: m._id,
+          email: m.email,
+          username: m.username,
+          text: m.text,
+          timestamp: m.createdAt,
+        }))
+      );
+    } catch (err) {
+      console.error("LOAD MESSAGES ERROR:", err);
+      socket.emit("messages-loaded", []);
+    }
+  });
+
+  // Send message and save to Message collection
+  socket.on("send-message", async ({ roomId, email, text, timestamp }) => {
+    if (!text?.trim()) return;
+
+    try {
+      // Create message in database
+      const message = await Message.create({
+        roomId,
+        email: email || socket.email,
+        username: socket.user?.username || (email || socket.email).split("@")[0],
+        text: text.trim(),
+      });
+
+      // Broadcast to all users in the room (including sender)
+      io.to(roomId).emit("receive-message", {
+        id: message._id,
+        email: message.email,
+        username: message.username,
+        text: message.text,
+        timestamp: message.createdAt,
+      });
+
+    } catch (err) {
+      console.error("SEND MESSAGE ERROR:", err);
+    }
+  });
+
+  // Clear messages (owner only)
+  socket.on("clear-messages", async ({ roomId }) => {
+    try {
+      const workspace = await Workspace.findOne({ roomId });
+      if (!workspace) return;
+
+      // 🔐 Check if the user is the owner
+      if (String(workspace.owner) !== String(socket.user?.id)) {
+        return socket.emit("action-denied", {
+          message: "Only owner can clear messages",
+        });
+      }
+
+      // Delete all messages for this room from Message collection
+      await Message.deleteMany({ roomId });
+
+      // Broadcast to all users in the room
+      io.to(roomId).emit("messages-cleared");
+
+    } catch (err) {
+      console.error("CLEAR MESSAGES ERROR:", err);
+    }
+  });
 
   /* ---------------- DISCONNECT ---------------- */
   socket.on("disconnect", () => {
