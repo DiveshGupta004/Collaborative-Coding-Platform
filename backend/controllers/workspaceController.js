@@ -2,6 +2,11 @@
 import Workspace from "../models/Workspace.js";
 import User from "../models/User.js";
 import { nanoid } from "nanoid";
+import { sendMail } from "../utils/sendMail.js";
+import {
+  collaboratorAddedTemplate,
+  inviteUserTemplate,
+} from "../utils/emailTemplates.js";
 
 /* ---------------- CREATE WORKSPACE ---------------- */
 export const createWorkspace = async (req, res) => {
@@ -74,55 +79,63 @@ export const addCollaborator = async (req, res) => {
     const { roomId } = req.params;
     const { email } = req.body;
 
-    if (!email?.trim()) {
-      return res.status(400).json({ message: "Email is required" });
-    }
-
     const workspace = await Workspace.findOne({ roomId });
-    if (!workspace) {
+    if (!workspace)
       return res.status(404).json({ message: "Workspace not found" });
-    }
 
-    // 🔐 Only owner
-    if (String(workspace.owner) !== String(req.user.id)) {
+    if (String(workspace.owner) !== String(req.user.id))
       return res.status(403).json({ message: "Only owner can add collaborators" });
+
+    const trimmedEmail = email.trim();
+
+    // Ensure arrays exist
+    workspace.allowedUsers ||= [];
+    workspace.collaborators ||= [];
+
+    // Prevent duplicates
+    if (workspace.allowedUsers.includes(trimmedEmail)) {
+      return res.status(400).json({ message: "User already added" });
     }
 
-    // 🔍 Check user exists
-    const user = await User.findOne({ email: email.trim() });
-    if (!user) {
-      return res.status(404).json({ message: "User is not registered" });
+    const user = await User.findOne({ email: trimmedEmail });
+
+    const roomLink = `${process.env.FRONTEND_URL}/room/${roomId}`;
+
+    if (user) {
+      // ✅ Registered user
+      workspace.allowedUsers.push(trimmedEmail);
+      workspace.collaborators.push(user._id);
+      await workspace.save();
+
+      await sendMail({
+        to: trimmedEmail,
+        subject: "You were added to a workspace",
+        html: collaboratorAddedTemplate({
+          projectName: workspace.projectName,
+          roomLink,
+        }),
+      });
+
+      return res.json({ message: "Collaborator added and notified" });
     }
 
-    // 🛡️ SAFETY: ensure arrays exist
-    if (!Array.isArray(workspace.allowedUsers)) {
-      workspace.allowedUsers = [];
-    }
-    if (!Array.isArray(workspace.collaborators)) {
-      workspace.collaborators = [];
-    }
-
-    // ❌ Duplicate check
-    if (workspace.allowedUsers.includes(email.trim())) {
-      return res.status(400).json({ message: "User is already a collaborator" });
-    }
-
-    // ✅ Add collaborator
-    workspace.allowedUsers.push(email.trim());
-    workspace.collaborators.push(user._id);
-
-    await workspace.save();
-
-    return res.status(200).json({
-      message: "Collaborator added successfully",
-      collaborator: {
-        email: user.email,
-        username: user.username,
-      },
+    // ❌ Not registered → invite email
+    await sendMail({
+      to: trimmedEmail,
+      subject: "Invitation to collaborate on CodeMate",
+      html: inviteUserTemplate({
+        projectName: workspace.projectName,
+        signupLink: `${process.env.FRONTEND_URL}/signup`,
+      }),
     });
-  } catch (error) {
-    console.error("ADD COLLABORATOR ERROR:", error);
-    return res.status(500).json({ message: "Internal server error" });
+
+    return res.status(404).json({
+      message: "User not registered. Invitation email sent.",
+    });
+
+  } catch (err) {
+    console.error("ADD COLLABORATOR ERROR:", err);
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 

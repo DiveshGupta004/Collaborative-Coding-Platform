@@ -89,8 +89,13 @@ export default function CollaboratorsPanel({
       await api.post(
         `/workspace/${roomId}/add`,
         { email },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
       );
+
 
       toast.success("Collaborator added");
       setEmail("");
