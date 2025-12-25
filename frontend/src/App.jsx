@@ -5,6 +5,7 @@ import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import EditorPage from "./pages/EditorPage";
+import AccessDenied from "./pages/AccessDeniedPage";
 import { useEffect } from "react";
 import { Toaster } from "react-hot-toast";
 
@@ -47,6 +48,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/room/:roomId" element={<EditorPage />} />
+            <Route path="/access-denied" element={<AccessDenied />} />
           </Routes>
         </LayoutWrapper>
       </BrowserRouter>

@@ -8,6 +8,7 @@ import {
   getCollaborators,
   loadWorkspace,
   saveWorkspaceData,
+  checkRoomAccess,
 } from "../controllers/workspaceController.js";
 import { auth } from "../middleware/authMiddleware.js";
 
@@ -20,6 +21,7 @@ router.delete("/:id", auth, deleteWorkspace);
 router.get("/:roomId/members", auth, getCollaborators);
 router.post("/:roomId/add", auth, addCollaborator);
 router.post("/:roomId/remove", auth, removeCollaborator);
+router.get("/:roomId/check-access", auth, checkRoomAccess);
 
 /* NEW ROUTES (SAVING + LOADING WORKSPACE FILES) */
 router.get("/:roomId/load", auth, loadWorkspace);

@@ -41,7 +41,7 @@ const workspaceSchema = new mongoose.Schema(
 
     /* ✅ SINGLE SOURCE OF TRUTH */
     allowedUsers: {
-      type: [String], // emails (owner + collaborators)
+      type: [String],
       required: true,
       default: [],
     },

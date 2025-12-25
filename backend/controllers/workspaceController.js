@@ -72,49 +72,82 @@ export const deleteWorkspace = async (req, res) => {
 export const addCollaborator = async (req, res) => {
   try {
     const { roomId } = req.params;
-    let { email } = req.body;
+    const { email } = req.body;
 
-    if (!email) {
+    if (!email?.trim()) {
       return res.status(400).json({ message: "Email is required" });
     }
-
-    // 🔒 Normalize email
-    email = email.trim().toLowerCase();
 
     const workspace = await Workspace.findOne({ roomId });
     if (!workspace) {
       return res.status(404).json({ message: "Workspace not found" });
     }
 
-    // 🔐 Only owner can add
+    // 🔐 Only owner
     if (String(workspace.owner) !== String(req.user.id)) {
       return res.status(403).json({ message: "Only owner can add collaborators" });
     }
 
-    // 🚫 Owner cannot add themselves
-    if (email === req.user.email.toLowerCase()) {
-      return res.status(400).json({
-        message: "Owner is already part of the workspace",
-      });
+    // 🔍 Check user exists
+    const user = await User.findOne({ email: email.trim() });
+    if (!user) {
+      return res.status(404).json({ message: "User is not registered" });
     }
 
-    // 🚫 Prevent duplicates
-    if (workspace.allowedUsers.includes(email)) {
-      return res.status(400).json({
-        message: "User already added to workspace",
-      });
+    // 🛡️ SAFETY: ensure arrays exist
+    if (!Array.isArray(workspace.allowedUsers)) {
+      workspace.allowedUsers = [];
+    }
+    if (!Array.isArray(workspace.collaborators)) {
+      workspace.collaborators = [];
     }
 
-    workspace.allowedUsers.push(email);
+    // ❌ Duplicate check
+    if (workspace.allowedUsers.includes(email.trim())) {
+      return res.status(400).json({ message: "User is already a collaborator" });
+    }
+
+    // ✅ Add collaborator
+    workspace.allowedUsers.push(email.trim());
+    workspace.collaborators.push(user._id);
+
     await workspace.save();
 
     return res.status(200).json({
       message: "Collaborator added successfully",
-      allowedUsers: workspace.allowedUsers,
+      collaborator: {
+        email: user.email,
+        username: user.username,
+      },
     });
   } catch (error) {
     console.error("ADD COLLABORATOR ERROR:", error);
     return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+
+export const checkRoomAccess = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+
+    const workspace = await Workspace.findOne({ roomId });
+    if (!workspace) {
+      return res.status(404).json({ message: "Workspace not found" });
+    }
+
+    const userEmail = req.user?.email;
+    if (!userEmail) {
+      return res.status(401).json({ message: "Not authenticated" });
+    }
+
+    if (!workspace.allowedUsers.includes(userEmail)) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    res.status(500).json({ message: "Server error" });
   }
 };
 

@@ -126,6 +126,31 @@ export default function EditorPage() {
     activeFileRef.current = activeFile;
   }, [activeFile]);
 
+  /* -------- Verify Access ------- */
+  useEffect(() => {
+    if (!accessToken) {
+      navigate("/signup");
+      return;
+    }
+    const verifyAccess = async () => {
+      try {
+        await axios.get(`/api/workspace/${roomId}/check-access`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      } catch (err) {
+        const status = err.response?.status;
+        if (status === 401) {
+          navigate("/login");
+        } else if (status === 403) {
+          navigate("/access-denied");
+        } else {
+          navigate("/");
+        }
+      }
+    };
+    verifyAccess();
+  }, [roomId, accessToken, navigate]);
+
   /* -------- Fetch Workspace Members ------- */
   const fetchMembers = async () => {
     try {
