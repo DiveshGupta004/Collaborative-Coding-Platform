@@ -14,7 +14,6 @@ import { auth } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-/* EXISTING ROUTES */
 router.post("/create", auth, createWorkspace);
 router.get("/", auth, getWorkspaces);
 router.delete("/:id", auth, deleteWorkspace);
@@ -23,7 +22,6 @@ router.post("/:roomId/add", auth, addCollaborator);
 router.post("/:roomId/remove", auth, removeCollaborator);
 router.get("/:roomId/check-access", auth, checkRoomAccess);
 
-/* NEW ROUTES (SAVING + LOADING WORKSPACE FILES) */
 router.get("/:roomId/load", auth, loadWorkspace);
 router.put("/:roomId/save", auth, saveWorkspaceData);
 

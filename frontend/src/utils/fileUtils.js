@@ -1,11 +1,8 @@
-// src/utils/fileUtils.js
-
 export const getLanguage = (filename = "") => {
   if (!filename) return "plaintext";
 
   const lower = filename.toLowerCase();
 
-  // handle special filenames without extension
   if (lower === "dockerfile") return "dockerfile";
   if (lower === "makefile") return "makefile";
 

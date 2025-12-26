@@ -1,4 +1,3 @@
-// backend/controllers/workspaceController.js
 import Workspace from "../models/Workspace.js";
 import User from "../models/User.js";
 import { nanoid } from "nanoid";
@@ -88,11 +87,9 @@ export const addCollaborator = async (req, res) => {
 
     const trimmedEmail = email.trim();
 
-    // Ensure arrays exist
     workspace.allowedUsers ||= [];
     workspace.collaborators ||= [];
 
-    // Prevent duplicates
     if (workspace.allowedUsers.includes(trimmedEmail)) {
       return res.status(400).json({ message: "User already added" });
     }
@@ -102,7 +99,6 @@ export const addCollaborator = async (req, res) => {
     const roomLink = `${process.env.FRONTEND_URL}/room/${roomId}`;
 
     if (user) {
-      // ✅ Registered user
       workspace.allowedUsers.push(trimmedEmail);
       workspace.collaborators.push(user._id);
       await workspace.save();
@@ -119,7 +115,6 @@ export const addCollaborator = async (req, res) => {
       return res.json({ message: "Collaborator added and notified" });
     }
 
-    // ❌ Not registered → invite email
     await sendMail({
       to: trimmedEmail,
       subject: "Invitation to collaborate on CodeMate",
@@ -209,13 +204,11 @@ export const getCollaborators = async (req, res) => {
       return res.status(404).json({ message: "Workspace not found" });
     }
 
-    // fetch collaborator user objects
     const users = await User.find(
       { email: { $in: workspace.allowedUsers } },
       "email username"
     );
 
-    // remove owner from collaborators list
     const collaborators = users.filter(
       (u) => u.email !== workspace.owner.email
     );
@@ -233,11 +226,7 @@ export const getCollaborators = async (req, res) => {
 
 
 
-/* ---------------------------------------------------------
-   ✨ NEW FEATURE: SAVE + LOAD PROJECT FILES
----------------------------------------------------------- */
-
-/* ------ Load Workspace Files (when opening editor) ------ */
+/* ------ Load Workspace Files ------ */
 export const loadWorkspace = async (req, res) => {
   try {
     const { roomId } = req.params;
@@ -259,7 +248,7 @@ export const loadWorkspace = async (req, res) => {
 };
 
 
-/* ------ Save Workspace Files (Auto-save + Manual) ------ */
+/* ------ Save Workspace Files ------ */
 export const saveWorkspaceData = async (req, res) => {
   try {
     const { roomId } = req.params;

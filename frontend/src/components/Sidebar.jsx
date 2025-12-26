@@ -28,7 +28,6 @@ export default function Sidebar({
   const [newName, setNewName] = useState("");
   const sidebarRef = useRef(null);
 
-  // Auto-scroll when new files/folders appear
   useEffect(() => {
     sidebarRef.current?.scrollTo({
       top: sidebarRef.current.scrollHeight,
@@ -61,13 +60,9 @@ export default function Sidebar({
     return <FiFile className={isDark ? "text-gray-400" : "text-gray-600"} />;
   };
 
-  // ──────────────────────────────────────────────
-  // RENDER FILE TREE  (Recursive)
-  // ──────────────────────────────────────────────
   const renderNode = (node, depth) => {
     const pad = { paddingLeft: depth * 16 };
 
-    // ░░░░░ FOLDER ░░░░░
     if (node.type === "folder") {
       const open = expanded[node.id];
       const ren = renaming === node.id;
@@ -118,7 +113,6 @@ export default function Sidebar({
       );
     }
 
-    // ░░░░░ FILE ░░░░░
     const active = activeFile?.id === node.id;
     const ren = renaming === node.id;
 
@@ -175,7 +169,7 @@ export default function Sidebar({
         isDark ? "bg-gray-900 border-gray-800 text-gray-300" : "bg-gray-100 border-gray-300 text-gray-700"
       }`}
     >
-      {/* Header */}
+
       <div className="flex items-center justify-between px-4 py-2 border-b border-gray-700/40">
         <span className="text-sm font-semibold text-indigo-400">EXPLORER</span>
 
@@ -192,9 +186,6 @@ export default function Sidebar({
   );
 }
 
-/* ──────────────────────────────────────────────
-   Small, reusable icon button component
-────────────────────────────────────────────── */
 function IconBtn({ icon: Icon, onClick, red }) {
   return (
     <button

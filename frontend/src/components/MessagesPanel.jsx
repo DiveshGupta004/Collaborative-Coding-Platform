@@ -52,10 +52,8 @@ export default function MessagesPanel({
 
     socketRef.current = socket;
 
-    // Join messages room
     socket.emit("join-messages", { roomId });
 
-    // Load previous messages
     socket.emit("load-messages", { roomId });
 
     socket.on("messages-loaded", (loadedMessages) => {
@@ -71,11 +69,9 @@ export default function MessagesPanel({
       setConfirmClear(false);
     });
 
-    // Typing indicators
     socket.on("user-typing", ({ email, username }) => {
       if (email && email !== currentUserEmail) {
         setTypingUsers((prev) => {
-          // Remove existing entry for this email, then add updated one
           const filtered = prev.filter((u) => u && u.email !== email);
           const newUser = { email, username: username || email.split("@")[0] };
           return [...filtered, newUser];
@@ -90,7 +86,6 @@ export default function MessagesPanel({
     });
 
     return () => {
-      // Clear typing timeout on unmount
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
         socketRef.current?.emit("stop-typing", { roomId });
@@ -112,17 +107,14 @@ export default function MessagesPanel({
 
   /* ---------- TYPING INDICATOR ---------- */
   const handleTyping = () => {
-    // Only emit if we haven't already marked ourselves as typing
     if (!typingTimeoutRef.current) {
       socketRef.current?.emit("typing", { roomId });
     }
 
-    // Clear existing timeout
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
 
-    // Set new timeout to stop typing after 3 seconds of inactivity
     typingTimeoutRef.current = setTimeout(() => {
       socketRef.current?.emit("stop-typing", { roomId });
       typingTimeoutRef.current = null;
@@ -134,7 +126,6 @@ export default function MessagesPanel({
     e.preventDefault();
     if (!newMessage.trim()) return;
 
-    // Stop typing indicator when sending
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
@@ -195,7 +186,6 @@ export default function MessagesPanel({
     return `${count} people are typing...`;
   };
 
-  /* ---------- UI ---------- */
   return (
     <div
       className={`w-64 h-full flex flex-col ${
@@ -204,7 +194,6 @@ export default function MessagesPanel({
           : "bg-gray-100 border-r border-gray-300"
       }`}
     >
-      {/* HEADER */}
       <div
         className={`px-4 py-3 border-b flex items-center justify-between ${
           isDark ? "border-gray-800" : "border-gray-300"
@@ -218,7 +207,6 @@ export default function MessagesPanel({
           MESSAGES
         </h2>
 
-        {/* Clear button - only visible to owner */}
         {isOwner && messages.length > 0 && !confirmClear && (
           <button
             onClick={requestClear}
@@ -234,7 +222,6 @@ export default function MessagesPanel({
         )}
       </div>
 
-      {/* CONFIRM CLEAR BAR */}
       {confirmClear && (
         <div
           className={`px-3 py-2 text-xs flex justify-between items-center border-b ${
@@ -265,7 +252,6 @@ export default function MessagesPanel({
         </div>
       )}
 
-      {/* MESSAGES LIST */}
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {messages.length === 0 ? (
           <div
@@ -283,7 +269,6 @@ export default function MessagesPanel({
                 key={msg.id || idx}
                 className={`flex gap-2 ${isOwn ? "flex-row-reverse" : ""}`}
               >
-                {/* Avatar */}
                 <div
                   className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 ${
                     isOwn
@@ -296,7 +281,6 @@ export default function MessagesPanel({
                   {getInitials(msg.email)}
                 </div>
 
-                {/* Message Bubble */}
                 <div className={`flex flex-col ${isOwn ? "items-end" : ""}`}>
                   <div
                     className={`px-3 py-2 rounded-lg max-w-[180px] break-words ${
@@ -331,7 +315,6 @@ export default function MessagesPanel({
           })
         )}
 
-        {/* TYPING INDICATOR */}
         {typingUsers.length > 0 && (
           <div className="flex gap-2 items-center">
             <div
@@ -373,7 +356,6 @@ export default function MessagesPanel({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* INPUT AREA */}
       <form
         onSubmit={handleSendMessage}
         className={`p-3 border-t ${

@@ -17,10 +17,9 @@ export default function Navbar() {
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [selectedWorkspace, setSelectedWorkspace] = useState(null);
 
-  const [workspaces, setWorkspaces] = useState([]);   // always array
+  const [workspaces, setWorkspaces] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Create Workspace modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [emails, setEmails] = useState([]);
@@ -39,12 +38,11 @@ export default function Navbar() {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      // ✅ Backend returns: { workspaces: [...] }
       setWorkspaces(res.data.workspaces || []);
     } catch (err) {
       console.log("Workspace Fetch Error:", err.response?.data || err.message);
       toast.error(err.response?.data?.message || "Failed to load workspaces");
-      setWorkspaces([]); // keep as array to avoid crashes
+      setWorkspaces([]);
     } finally {
       setLoading(false);
     }
@@ -71,9 +69,6 @@ export default function Navbar() {
       setProjectName("");
       setEmails([]);
 
-      // add new workspace at top without refetch if you want:
-      // setWorkspaces(prev => [res.data.workspace, ...prev]);
-      // or just refetch:
       fetchWorkspaces();
     } catch (err) {
       console.log("Create workspace error:", err.response?.data || err.message);
@@ -94,7 +89,6 @@ export default function Navbar() {
       setDeleteConfirm(false);
       setSelectedWorkspace(null);
 
-      // remove locally (no need to refetch if you don't want)
       setWorkspaces((prev) => prev.filter((w) => w._id !== selectedWorkspace));
     } catch (err) {
       console.log("Delete workspace error:", err.response?.data || err.message);
@@ -117,10 +111,8 @@ export default function Navbar() {
 
   return (
     <>
-      {/* 🌟 NAVBAR */}
       <header className="fixed top-0 left-0 w-full z-50 bg-gray-900/90 backdrop-blur-md border-b border-gray-800 shadow-md">
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
-          {/* Brand */}
           <Link
             to="/"
             className="text-2xl font-extrabold text-indigo-400 tracking-wide"
@@ -128,7 +120,6 @@ export default function Navbar() {
             CodeMate.
           </Link>
 
-          {/* Desktop Menu */}
           <div className="hidden md:flex items-center gap-5">
             {!user ? (
               <>
@@ -147,7 +138,6 @@ export default function Navbar() {
               </>
             ) : (
               <>
-                {/* Workspaces Button */}
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   onClick={() => setWorkspacePanel(true)}
@@ -156,7 +146,6 @@ export default function Navbar() {
                   Workspaces
                 </motion.button>
 
-                {/* Avatar */}
                 <div className="relative" ref={dropdownRef}>
                   <motion.div
                     whileHover={{ scale: 1.05 }}
@@ -166,7 +155,6 @@ export default function Navbar() {
                     {getInitial(user.username)}
                   </motion.div>
 
-                  {/* Avatar Dropdown */}
                   <AnimatePresence>
                     {avatarDropdown && (
                       <motion.div
@@ -196,7 +184,6 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* Mobile Menu Button */}
           <button
             className="md:hidden text-gray-300 text-2xl"
             onClick={() => setMenuOpen((prev) => !prev)}
@@ -206,7 +193,6 @@ export default function Navbar() {
         </div>
       </header>
 
-      {/* 📱 Mobile Dropdown */}
       <AnimatePresence>
         {menuOpen && (
           <motion.div
@@ -262,7 +248,6 @@ export default function Navbar() {
         )}
       </AnimatePresence>
 
-      {/* 📌 Workspace Panel */}
       <AnimatePresence>
         {workspacePanel && (
           <motion.div
@@ -311,7 +296,6 @@ export default function Navbar() {
               )}
             </div>
 
-            {/* Create Workspace Button (opens modal) */}
             <button
               className="w-full flex items-center justify-center gap-2 mt-4 py-2 rounded-lg border border-indigo-500 text-indigo-400 hover:bg-indigo-600 hover:text-white transition"
               onClick={() => setShowCreateModal(true)}
@@ -322,7 +306,6 @@ export default function Navbar() {
         )}
       </AnimatePresence>
 
-      {/* ❌ Delete Confirmation Modal */}
       <AnimatePresence>
         {deleteConfirm && (
           <motion.div
@@ -366,7 +349,6 @@ export default function Navbar() {
         )}
       </AnimatePresence>
 
-      {/* 🧩 Create Workspace Modal (same as on Home "Get Started") */}
       <CreateWorkspaceModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}

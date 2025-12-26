@@ -24,19 +24,16 @@ export default function CollaboratorsPanel({
 
       const { owner, collaborators } = res.data;
 
-      // Store owner email for validation
       setOwnerEmail(owner.email);
 
-      // Format members with proper username/email display
       const formatted = [
         {
           email: owner.email,
           role: "Owner",
           username: owner.username,
-          displayName: owner.username || owner.email // Primary display
+          displayName: owner.username || owner.email
         },
         ...(collaborators || []).map((collab) => {
-          // If collaborators array contains objects with username
           if (typeof collab === "object") {
             return {
               email: collab.email,
@@ -45,23 +42,20 @@ export default function CollaboratorsPanel({
               displayName: collab.username || collab.email
             };
           }
-          // If collaborators array contains just email strings
           return {
             email: collab,
             role: "Collaborator",
-            displayName: collab // Will just show email for now
+            displayName: collab
           };
         }),
       ];
 
       setMembers(formatted);
 
-      // Check if current user is owner
       if (currentUserEmail) {
         setIsOwner(owner.email === currentUserEmail);
       }
 
-      // Update ActivityBar if callback provided
       if (onMembersChange) {
         onMembersChange(formatted);
       }
@@ -80,7 +74,6 @@ export default function CollaboratorsPanel({
   const addMember = async () => {
     if (!email.trim()) return toast.error("Enter email");
 
-    // Check if user is owner before adding
     if (!isOwner) {
       return toast.error("Only the owner can add collaborators");
     }
@@ -107,12 +100,10 @@ export default function CollaboratorsPanel({
   };
 
   const removeMember = async (userEmail) => {
-    // Check if user is owner before removing
     if (!isOwner) {
       return toast.error("Only the owner can remove collaborators");
     }
 
-    // Prevent removing owner
     if (userEmail === ownerEmail) {
       return toast.error("Owner cannot be removed");
     }
@@ -124,22 +115,18 @@ export default function CollaboratorsPanel({
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
 
-      // Use the callback if provided, otherwise emit directly
       if (onKickCollaborator) {
         onKickCollaborator(userEmail);
       } else {
-        // Fallback to direct socket emit
         socket.emit("kick-collaborator", {
           roomId,
           email: userEmail,
         });
       }
 
-      // Update local state
       const updated = members.filter((u) => u.email !== userEmail);
       setMembers(updated);
 
-      // Update ActivityBar if callback provided
       if (onMembersChange) {
         onMembersChange(updated);
       }
@@ -157,7 +144,6 @@ export default function CollaboratorsPanel({
         <FiUsers /> Members ({members.length})
       </div>
 
-      {/* Only show add input if user is owner */}
       {isOwner && (
         <div className="flex gap-2 mb-3">
           <input
@@ -188,7 +174,6 @@ export default function CollaboratorsPanel({
         {members.map((user, i) => (
           <div key={i} className="flex justify-between items-center p-2 bg-gray-800 rounded">
             <div className="flex-1 min-w-0">
-              {/* Show username as primary, email as secondary */}
               <p className="text-sm font-medium truncate flex items-center gap-2">
                 <span>{user.displayName}</span>
                 {user.email === currentUserEmail && (
@@ -200,8 +185,7 @@ export default function CollaboratorsPanel({
               )}
               <p className="text-xs text-indigo-400 mt-0.5">{user.role}</p>
             </div>
-
-            {/* Only show remove button if current user is owner AND the user is not the owner */}
+            
             {isOwner && user.role !== "Owner" && (
               <FiXCircle
                 onClick={() => removeMember(user.email)}

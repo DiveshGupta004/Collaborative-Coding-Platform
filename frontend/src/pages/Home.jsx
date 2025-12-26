@@ -70,13 +70,10 @@ export default function Home() {
   return (
     <div className="min-h-screen flex flex-col bg-gray-900 text-white">
 
-      {/* MAIN CONTENT */}
       <div className="flex-1 px-6 pt-28 md:pt-32 relative max-w-6xl mx-auto w-full">
 
-        {/* Background Glow */}
         <div className="absolute top-[-120px] left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-indigo-600 opacity-20 blur-[180px] rounded-full"></div>
 
-        {/* HERO SECTION */}
         <section className="relative z-10 text-center py-12 md:py-16">
           <motion.h1
             className="text-4xl md:text-6xl font-extrabold mb-4 bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent"
@@ -106,8 +103,7 @@ export default function Home() {
             Get Started
           </motion.button>
         </section>
-
-        {/* FEATURES SECTION */}
+        
         <section className="relative z-10 py-10 md:py-14">
           <motion.h2
             className="text-center text-2xl md:text-3xl font-bold text-indigo-400 mb-10"

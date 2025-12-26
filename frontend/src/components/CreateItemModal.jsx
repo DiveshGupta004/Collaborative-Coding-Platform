@@ -5,7 +5,7 @@ export default function CreateItemModal({
   isOpen,
   onClose,
   onCreate,
-  type = "file", // "file" or "folder"
+  type = "file",
 }) {
   const [name, setName] = useState("");
 
@@ -25,7 +25,6 @@ export default function CreateItemModal({
     <AnimatePresence>
       {isOpen && (
         <>
-          {/* Backdrop */}
           <motion.div
             className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
             initial={{ opacity: 0 }}
@@ -34,7 +33,6 @@ export default function CreateItemModal({
             onClick={onClose}
           />
 
-          {/* Modal */}
           <motion.div
             initial={{ opacity: 0, scale: 0.9, y: -20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}

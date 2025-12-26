@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { v4 as uuidv4 } from "uuid";
 
-/* ---------- File Schema (Recursive + Stable) ---------- */
+/* ---------- File Schema ---------- */
 const fileSchema = new mongoose.Schema(
   {
     id: { type: String, required: true },
@@ -9,7 +9,6 @@ const fileSchema = new mongoose.Schema(
     type: { type: String, enum: ["file", "folder"], required: true },
     content: { type: String, default: "" },
 
-    // Recursive structure
     children: {
       type: [mongoose.Schema.Types.Mixed],
       default: [],
@@ -39,7 +38,6 @@ const workspaceSchema = new mongoose.Schema(
       required: true,
     },
 
-    /* ✅ SINGLE SOURCE OF TRUTH */
     allowedUsers: {
       type: [String],
       required: true,

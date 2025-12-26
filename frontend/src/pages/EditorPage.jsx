@@ -36,7 +36,6 @@ const SERVER_URL =
 const makeId = () =>
   `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
 
-/* --------- UTILS --------- */
 function requestFullscreenSoft() {
   const el = document.documentElement;
   if (!document.fullscreenElement && el.requestFullscreen) {
@@ -87,7 +86,6 @@ const updateFileContent = (tree, id, value) =>
         : n
   );
 
-/* ---------------- COMPONENT ---------------- */
 export default function EditorPage() {
   const { roomId } = useParams();
   const navigate = useNavigate();
@@ -126,7 +124,6 @@ export default function EditorPage() {
     activeFileRef.current = activeFile;
   }, [activeFile]);
 
-  /* -------- Verify Access ------- */
   useEffect(() => {
     if (!accessToken) {
       navigate("/signup");
@@ -151,7 +148,6 @@ export default function EditorPage() {
     verifyAccess();
   }, [roomId, accessToken, navigate]);
 
-  /* -------- Fetch Workspace Members ------- */
   const fetchMembers = async () => {
     try {
       const res = await axios.get(`/api/workspace/${roomId}/members`, {
@@ -183,7 +179,6 @@ export default function EditorPage() {
   };
 
 
-  /* -------- Kick Collaborator ------- */
   const handleKickCollaborator = (email) => {
     if (!socketRef.current) return;
 
@@ -196,7 +191,6 @@ export default function EditorPage() {
     fetchMembers();
   };
 
-  /* -------- SAVE TO DB -------- */
   const saveToDB = async () => {
     try {
       await axios.put(
@@ -209,7 +203,6 @@ export default function EditorPage() {
     }
   };
 
-  /* -------- SOCKET CONNECTION -------- */
   useEffect(() => {
     if (!roomId) return;
 
@@ -254,7 +247,6 @@ export default function EditorPage() {
       ]);
     });
 
-    // 🔥 NEW: Workspace Init (full snapshot)
     socket.on("workspace-init", ({ files, openTabs, activeFileId }) => {
       const assign = (arr) =>
         arr.map((n) => ({
@@ -278,7 +270,6 @@ export default function EditorPage() {
       }
     });
 
-    // Keep backward compatibility with load-code
     socket.on("load-code", async () => {
       let saved = loadWorkspace(roomId);
 
@@ -312,27 +303,21 @@ export default function EditorPage() {
       }
     });
 
-    // 🔥 NEW: Per-file code changes
     socket.on("receive-changes", (data) => {
-      // Support both formats
       if (typeof data === "string") {
-        // Old format: just code string
         if (!activeFileRef.current) return;
         setFiles((prev) => updateFileContent(prev, activeFileRef.current.id, data));
         setActiveFile({ ...activeFileRef.current, content: data });
       } else {
-        // New format: { fileId, code }
         const { fileId, code } = data;
         setFiles((prev) => updateFileContent(prev, fileId, code));
 
-        // Update active file if it's the one being changed
         if (activeFileRef.current?.id === fileId) {
           setActiveFile({ ...activeFileRef.current, content: code });
         }
       }
     });
 
-    // 🔥 NEW: File tree sync
     socket.on("files-sync", (syncedFiles) => {
       setFiles(syncedFiles);
     });
@@ -385,14 +370,12 @@ export default function EditorPage() {
     };
   }, [roomId, accessToken, navigate, user]);
 
-  /* -------- 🔥 NEW: Cursor Sync -------- */
   useEffect(() => {
     if (!socketRef.current || !editorRef.current || !activeFile) return;
 
     const handleCursorUpdate = ({ fileId, email, position }) => {
       if (fileId !== activeFile?.id || !editorRef.current) return;
 
-      // Clear previous decorations
       cursorDecorationsRef.current = editorRef.current.deltaDecorations(
         cursorDecorationsRef.current,
         [
@@ -419,7 +402,6 @@ export default function EditorPage() {
     };
   }, [activeFile]);
 
-  /* -------- Setup Theme -------- */
   useEffect(() => {
     monacoEditor.defineTheme("dark-mode", {
       base: "vs-dark",
@@ -438,7 +420,6 @@ export default function EditorPage() {
     setFadeKey((key) => key + 1);
   }, [theme]);
 
-  /* -------- AUTO SAVE: DB + LOCAL ------- */
   useEffect(() => {
     saveWorkspace(roomId, { files, openTabs, activeFileId: activeFile?.id || null });
 
@@ -452,7 +433,6 @@ export default function EditorPage() {
     }
   }, [files, openTabs, activeFile, autoSave, roomId]);
 
-  /* -------- File Actions -------- */
   const handleCreateFile = (parent, name) => {
     requestFullscreenSoft();
     const file = { id: makeId(), name, content: "", type: "file" };
@@ -471,7 +451,6 @@ export default function EditorPage() {
     setOpenTabs((prev) => [...prev, file]);
     setLanguage(getLanguage(name));
 
-    // 🔥 NEW: Sync file tree to other clients
     socketRef.current?.emit("files-update", {
       roomId,
       files: updatedFiles,
@@ -502,7 +481,6 @@ export default function EditorPage() {
 
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      // 🔥 NEW: Send fileId with code changes
       socketRef.current.emit("code-change", {
         roomId,
         fileId: activeFile.id,
@@ -531,7 +509,6 @@ export default function EditorPage() {
       className={`h-screen flex flex-col ${theme === "dark-mode" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-900"
         }`}
     >
-      {/* ==== Top Right Controls ==== */}
       <div className="absolute right-4 top-3 z-50 flex gap-3">
         <button
           onClick={handleRun}
@@ -568,7 +545,6 @@ export default function EditorPage() {
           collaborators={collaborators}
         />
 
-        {/* Sidebar/Panel Area */}
         {activeTab === "users" ? (
           <CollaboratorsPanel
             roomId={roomId}
@@ -611,7 +587,6 @@ export default function EditorPage() {
               setOpenTabs((prev) => prev.filter((t) => t.id !== node.id));
               if (activeFile?.id === node.id) setActiveFile(null);
 
-              // 🔥 NEW: Sync file deletion
               socketRef.current?.emit("files-update", {
                 roomId,
                 files: updatedFiles,
@@ -620,7 +595,6 @@ export default function EditorPage() {
           />
         )}
 
-        {/* ===== Editor View ===== */}
         <div key={fadeKey} className="flex flex-col flex-1 overflow-hidden">
           <div
             className={`flex items-center border-b flex-none ${theme === "dark-mode" ? "border-gray-800" : "border-gray-300"
@@ -645,15 +619,12 @@ export default function EditorPage() {
                     const newTabs = openTabs.filter((t) => t.id !== tab.id);
                     setOpenTabs(newTabs);
 
-                    // If closing the active tab, switch to another tab
                     if (activeFile?.id === tab.id) {
                       if (newTabs.length > 0) {
-                        // Switch to the last remaining tab
                         const lastTab = newTabs[newTabs.length - 1];
                         setActiveFile(lastTab);
                         setLanguage(getLanguage(lastTab.name));
                       } else {
-                        // No tabs left, clear active file
                         setActiveFile(null);
                         setLanguage("");
                       }
@@ -677,7 +648,6 @@ export default function EditorPage() {
                   editorRef.current = editor;
                   monacoEditor.setTheme(theme);
 
-                  // 🔥 NEW: Track cursor position and emit to other users
                   editor.onDidChangeCursorPosition((e) => {
                     if (socketRef.current && activeFile) {
                       socketRef.current.emit("cursor-move", {
@@ -696,7 +666,6 @@ export default function EditorPage() {
             )}
           </div>
 
-          {/* Terminal */}
           {showTerminal && (
             <div
               className={`border-t flex-none h-64 min-h-[200px] max-h-[400px] overflow-hidden animate-slideUp ${theme === "dark-mode"
@@ -782,8 +751,6 @@ export default function EditorPage() {
                 { id: makeId(), type: "folder", name, children: [] },
               ];
               setFiles(updatedFiles);
-
-              // 🔥 NEW: Sync folder creation
               socketRef.current?.emit("files-update", {
                 roomId,
                 files: updatedFiles,

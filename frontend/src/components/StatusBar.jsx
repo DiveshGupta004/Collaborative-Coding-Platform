@@ -15,7 +15,6 @@ export default function StatusBar({
       layout
       className="h-7 bg-gray-950 border-t border-gray-800 flex items-center justify-between px-3 text-xs font-mono text-gray-400"
     >
-      {/* Left */}
       <div className="flex items-center gap-4">
         <span className="text-indigo-400 font-semibold tracking-tight">
           CodeMate v1.0
@@ -43,7 +42,6 @@ export default function StatusBar({
         </span>
       </div>
 
-      {/* Right */}
       <div className="flex items-center gap-4">
         {hasFileOpen && <span className="text-gray-400">{language?.toUpperCase()}</span>}
 

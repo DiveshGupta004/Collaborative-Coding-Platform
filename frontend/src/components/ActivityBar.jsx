@@ -46,7 +46,6 @@ export default function ActivityBar({
               {tab.icon}
             </button>
 
-            {/* Badge for collaborators */}
             {tab.id === "users" && tab.badge > 0 && (
               <span
                 className={`absolute -top-1 -right-1 text-[10px] px-1.5 rounded-full font-semibold ${isDark

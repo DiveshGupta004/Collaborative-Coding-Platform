@@ -1,4 +1,3 @@
-// backend/runners/execRunner.js
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
@@ -33,7 +32,6 @@ export function runProjectStream({
   fs.mkdirSync(runDir, { recursive: true });
 
   try {
-    // Write files to temp execution folder
     for (const f of files || []) {
       const safeName = f.name.replace(/^\/+/, "");
       const filePath = path.join(runDir, safeName);
@@ -42,7 +40,6 @@ export function runProjectStream({
       fs.writeFileSync(filePath, f.content ?? "", "utf8");
     }
 
-    // 🔧 Select command based on language
     let command;
     let args = [];
 
@@ -65,10 +62,8 @@ export function runProjectStream({
       return;
     }
 
-    // Run with live stream
     const proc = spawn(command, args, { cwd: runDir });
 
-    // Kill if too long
     const timer = setTimeout(() => {
       proc.kill("SIGKILL");
       onStderr("\n⛔ Execution stopped: timeout exceeded\n");
@@ -76,7 +71,6 @@ export function runProjectStream({
       cleanup(runDir);
     }, timeout);
 
-    // Output handling
     proc.stdout.on("data", (d) => onStdout(d.toString()));
     proc.stderr.on("data", (d) => onStderr(d.toString()));
 

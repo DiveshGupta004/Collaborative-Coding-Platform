@@ -27,7 +27,6 @@ export default function editorSocket(socket, io) {
       const workspace = await Workspace.findOne({ roomId });
       if (!workspace) return socket.emit("access-denied");
 
-      // 🔐 OWNER OR ALLOWED USER ONLY
       if (!workspace.allowedUsers.includes(email)) {
         return socket.emit("access-denied");
       }
@@ -37,18 +36,15 @@ export default function editorSocket(socket, io) {
       socket.email = email;
       socket.user = user || socket.user;
 
-      // 🔥 SEND FULL WORKSPACE SNAPSHOT
       socket.emit("workspace-init", {
         files: workspace.files || [],
         openTabs: workspace.openTabs || [],
         activeFileId: workspace.activeFileId || null,
       });
 
-      // Also emit old format for backward compatibility
       socket.emit("load-code", workspace.files || []);
       socket.emit("joined-authorized");
 
-      // notify others
       io.to(roomId).emit("user-joined", {
         email,
         username: socket.user?.username,
@@ -113,7 +109,6 @@ export default function editorSocket(socket, io) {
       const workspace = await Workspace.findOne({ roomId });
       if (!workspace) return;
 
-      // 🔐 ONLY OWNER CAN REMOVE
       if (String(workspace.owner) !== String(socket.user.id)) {
         return socket.emit("action-denied", {
           message: "Only owner can remove collaborators",
@@ -122,21 +117,18 @@ export default function editorSocket(socket, io) {
 
       const cleanEmail = email.trim().toLowerCase();
 
-      // 🚫 Owner cannot remove self
       if (cleanEmail === socket.email) {
         return socket.emit("action-denied", {
           message: "Owner cannot remove themselves",
         });
       }
 
-      // Remove from DB
       workspace.allowedUsers = workspace.allowedUsers
         .map(e => e.trim().toLowerCase())
         .filter(e => e !== cleanEmail);
 
       await workspace.save();
 
-      // Kick active socket if connected
       const sockets = await io.in(roomId).fetchSockets();
       sockets.forEach((s) => {
         if (s.email === cleanEmail) {
@@ -154,10 +146,8 @@ export default function editorSocket(socket, io) {
 
   /* ---------------- MESSAGES ---------------- */
   
-  // Join messages room (same as workspace room)
   socket.on("join-messages", async ({ roomId }) => {
     try {
-      // Extract user info from JWT if not already set
       if (!socket.email) {
         if (socket.handshake?.auth?.token) {
           try {
@@ -166,7 +156,6 @@ export default function editorSocket(socket, io) {
               process.env.JWT_SECRET || "secret"
             );
             
-            // Fetch user from database using the id from JWT
             if (decoded.id) {
               const User = (await import("../models/User.js")).default;
               const user = await User.findById(decoded.id).select("email username");
@@ -192,7 +181,6 @@ export default function editorSocket(socket, io) {
     }
   });
 
-  // Typing indicators
   socket.on("typing", ({ roomId }) => {
     const typingData = {
       email: socket.email,
@@ -208,7 +196,6 @@ export default function editorSocket(socket, io) {
     });
   });
 
-  // Load previous messages from Message collection
   socket.on("load-messages", async ({ roomId }) => {
     try {
       const messages = await Message.find({ roomId })
@@ -231,12 +218,10 @@ export default function editorSocket(socket, io) {
     }
   });
 
-  // Send message and save to Message collection
   socket.on("send-message", async ({ roomId, email, text, timestamp }) => {
     if (!text?.trim()) return;
 
     try {
-      // Create message in database
       const message = await Message.create({
         roomId,
         email: email || socket.email,
@@ -244,7 +229,6 @@ export default function editorSocket(socket, io) {
         text: text.trim(),
       });
 
-      // Broadcast to all users in the room (including sender)
       io.to(roomId).emit("receive-message", {
         id: message._id,
         email: message.email,
@@ -258,23 +242,19 @@ export default function editorSocket(socket, io) {
     }
   });
 
-  // Clear messages (owner only)
   socket.on("clear-messages", async ({ roomId }) => {
     try {
       const workspace = await Workspace.findOne({ roomId });
       if (!workspace) return;
 
-      // 🔐 Check if the user is the owner
       if (String(workspace.owner) !== String(socket.user?.id)) {
         return socket.emit("action-denied", {
           message: "Only owner can clear messages",
         });
       }
 
-      // Delete all messages for this room from Message collection
       await Message.deleteMany({ roomId });
 
-      // Broadcast to all users in the room
       io.to(roomId).emit("messages-cleared");
 
     } catch (err) {

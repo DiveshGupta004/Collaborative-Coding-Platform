@@ -9,12 +9,10 @@ import AccessDenied from "./pages/AccessDeniedPage";
 import { useEffect } from "react";
 import { Toaster } from "react-hot-toast";
 
-// Wrapper to handle conditional layout
 function LayoutWrapper({ children }) {
   const location = useLocation();
-  const hideLayout = location.pathname.startsWith("/room/"); // hide for editor
+  const hideLayout = location.pathname.startsWith("/room/");
 
-  // Optional: smooth scroll reset on route change
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [location.pathname]);

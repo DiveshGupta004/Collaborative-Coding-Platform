@@ -32,7 +32,6 @@ export default function Login() {
 
       toast.success("Login successful!");
 
-      // 🔥 If user was redirected from Get Started
       const params = new URLSearchParams(location.search);
       if (params.get("redirect") === "create-workspace") {
         navigate("/?openWorkspaceModal=true");
@@ -70,7 +69,6 @@ export default function Login() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           
-          {/* Email */}
           <div>
             <label className="block text-sm text-gray-300 mb-2">Email</label>
             <input
@@ -86,7 +84,6 @@ export default function Login() {
             />
           </div>
 
-          {/* Password */}
           <div>
             <label className="block text-sm text-gray-300 mb-2">Password</label>
             <input
@@ -102,7 +99,6 @@ export default function Login() {
             />
           </div>
 
-          {/* Login Button */}
           <motion.button
             whileHover={!loading ? { scale: 1.03 } : {}}
             whileTap={!loading ? { scale: 0.97 } : {}}

@@ -39,19 +39,17 @@ export default function Signup() {
 
   return (
     <div className="relative flex items-center justify-center min-h-screen bg-gray-900 px-4 sm:px-6 md:px-8 pt-[80px] overflow-hidden">
-      {/* Responsive Glow Background */}
+
       <div className="absolute inset-0 overflow-hidden">
         <div className="absolute w-[80vw] sm:w-[60vw] md:w-[40vw] aspect-square bg-indigo-600 opacity-20 blur-[200px] rounded-full top-[-100px] left-1/2 -translate-x-1/2"></div>
       </div>
 
-      {/* Card */}
       <motion.div
         initial={{ opacity: 0, y: 40 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8, ease: "easeOut" }}
         className="relative z-10 w-full max-w-sm sm:max-w-md bg-gray-800/50 border border-gray-700 rounded-2xl shadow-xl backdrop-blur-lg p-6 sm:p-8"
       >
-        {/* Title */}
         <h2 className="text-2xl sm:text-3xl font-bold text-center text-indigo-400 mb-2">
           Create Account
         </h2>
@@ -59,9 +57,7 @@ export default function Signup() {
           Join CodeMate. and start coding together
         </p>
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Name */}
           <div>
             <label className="block text-sm text-gray-300 mb-2">Name</label>
             <input
@@ -75,7 +71,6 @@ export default function Signup() {
             />
           </div>
 
-          {/* Email */}
           <div>
             <label className="block text-sm text-gray-300 mb-2">Email</label>
             <input
@@ -89,7 +84,6 @@ export default function Signup() {
             />
           </div>
 
-          {/* Password */}
           <div>
             <label className="block text-sm text-gray-300 mb-2">Password</label>
             <input
@@ -103,7 +97,6 @@ export default function Signup() {
             />
           </div>
 
-          {/* Confirm Password */}
           <div>
             <label className="block text-sm text-gray-300 mb-2">
               Confirm Password
@@ -119,7 +112,6 @@ export default function Signup() {
             />
           </div>
 
-          {/* Submit Button */}
           <motion.button
             whileHover={{
               scale: 1.03,
@@ -133,7 +125,6 @@ export default function Signup() {
           </motion.button>
         </form>
 
-        {/* Footer Links */}
         <div className="text-center mt-6 text-gray-400 text-sm sm:text-base">
           Already have an account?{" "}
           <Link
